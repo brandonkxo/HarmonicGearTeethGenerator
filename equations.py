@@ -15,6 +15,8 @@ import math
 DEFAULTS = {
     "m":  0.5,
     "z_f": 100,     # number of flexspline teeth (fixed, not optimized)
+    "z_c": 102,     # number of circular spline teeth
+    "w0":  0.5,     # max radial deformation omega_0 (mm)
     "r1": 0.685,
     "c1": 0.332,
     "e1": 0.155,
@@ -35,6 +37,8 @@ PITCH_RADIUS = DEFAULTS["m"] * DEFAULTS["z_f"] / 2.0  # 25.0 mm
 PARAM_LABELS = {
     "m":   "Module m",
     "z_f": "Teeth z_f",
+    "z_c": "Teeth z_c",
+    "w0":  "Max deform \u03c9\u2080",
     "r1":  "Convex radius r\u2081",
     "c1":  "O\u2081 x-offset c\u2081",
     "e1":  "O\u2081 y-offset e\u2081",
@@ -48,7 +52,7 @@ PARAM_LABELS = {
 }
 
 # Ordered list of parameter keys for consistent UI ordering
-PARAM_ORDER = ["m", "z_f", "r1", "c1", "e1", "r2", "c2", "e2", "ha", "hf", "s", "t"]
+PARAM_ORDER = ["m", "z_f", "z_c", "w0", "r1", "c1", "e1", "r2", "c2", "e2", "ha", "hf", "s", "t"]
 
 
 def compute_profile(params: dict) -> dict:
@@ -183,8 +187,13 @@ def compute_profile(params: dict) -> dict:
             y = -r2 * math.sin(angle) + y2_R
             pts_CD.append((x, y))
 
+    # ── Derived: neutral layer radius ────────────────────────────────
+    # From geometry: rp = rm + ds + hf  →  rm = rp - ds - hf
+    rm = rp - ds - hf
+
     return {
         "rp": rp,
+        "rm": rm,
         "ds": ds,
         "alpha": alpha,
         "delta": delta,
@@ -200,3 +209,208 @@ def compute_profile(params: dict) -> dict:
         "pts_BC": pts_BC,
         "pts_CD": pts_CD,
     }
+
+
+# ══════════════════════════════════════════════════════════════════
+# Section 2.2 — Neutral layer deformation (Eqs 14-20)
+# ══════════════════════════════════════════════════════════════════
+#
+# These describe how the flexspline neutral layer deforms under
+# the cosine-type wave generator.  φ is the angle of a point on
+# the undeformed neutral layer measured from the wave generator
+# major axis.
+
+def eq14_rho(phi: float, rm: float, w0: float) -> float:
+    """Eq 14: Radial vector of deformed neutral layer point.
+
+    ρ = rm + ω₀·cos(2φ)
+    """
+    return rm + w0 * math.cos(2.0 * phi)
+
+
+def eq15_radial_arc_change(omega: float, dphi: float) -> float:
+    """Eq 15: Radial change of a unit arc element.
+
+    A'B' - AB = (rm + ω)dφ - rm·dφ = ω·dφ
+    """
+    return omega * dphi
+
+
+def eq16_omega(rho: float, rm: float) -> float:
+    """Eq 16: Radial displacement (definition).
+
+    ω = ρ - rm
+    """
+    return rho - rm
+
+
+def eq17_omega(phi: float, w0: float) -> float:
+    """Eq 17: Radial displacement (Eq 14 substituted into Eq 16).
+
+    ω = ω₀·cos(2φ)
+    """
+    return w0 * math.cos(2.0 * phi)
+
+
+def eq18_tangential_arc_change(dv: float) -> float:
+    """Eq 18: Tangential change of a unit arc element.
+
+    A''B'' - A'B' = (v + dv) - v = dv
+    """
+    return dv
+
+
+def eq19_neutral_layer_invariance(omega: float, dphi: float, dv: float) -> float:
+    """Eq 19: Neutral layer invariance condition.
+
+    ω·dφ + dv = 0
+
+    Returns the residual (should be zero when satisfied).
+    """
+    return omega * dphi + dv
+
+
+def eq20_v(phi: float, w0: float) -> float:
+    """Eq 20: Tangential displacement (integral of Eq 19 using Eq 17).
+
+    v = -∫ω dφ = -½·ω₀·sin(2φ)
+    """
+    return -0.5 * w0 * math.sin(2.0 * phi)
+
+
+# ══════════════════════════════════════════════════════════════════
+# Section 2.2 — Angular relationships (Eqs 21-27)
+# ══════════════════════════════════════════════════════════════════
+#
+# These define the angular relationships needed for the coordinate
+# transformation from the flexspline frame {O_R} to the fixed
+# circular spline frame {O_G}.
+
+def eq21_mu(phi: float, w0: float, rm: float) -> float:
+    """Eq 21: Normal deformation angle.
+
+    μ = arctan(ρ̇/ρ) ≈ -(1/rm)·(dω/dφ) = (2ω₀/rm)·sin(2φ)
+
+    where ρ̇ = dρ/dφ = -2ω₀·sin(2φ), and the approximation
+    holds because μ is small and rm >> ω.
+    """
+    return (2.0 * w0 / rm) * math.sin(2.0 * phi)
+
+
+def eq22_arc_length_invariance(phi: float, phi1: float, rm: float, w0: float) -> float:
+    """Eq 22: Neutral layer arc length invariance (residual form).
+
+    rm·φ = ∫₀^φ₁ √(ρ² + ρ̇²) dφ ≈ ∫₀^φ₁ ρ dφ
+
+    Returns rm·φ - ∫₀^φ₁ ρ dφ  (should be ~0 when φ₁ is correct).
+    Uses numerical integration (trapezoidal) for verification.
+    """
+    N = 200
+    dphi = phi1 / N
+    integral = 0.0
+    for i in range(N + 1):
+        p = i * dphi
+        rho = eq14_rho(p, rm, w0)
+        weight = 0.5 if (i == 0 or i == N) else 1.0
+        integral += weight * rho * dphi
+    return rm * phi - integral
+
+
+def eq23_phi1(phi: float, w0: float, rm: float) -> float:
+    """Eq 23: Angle of deformed endpoint relative to wave generator.
+
+    φ₁ = φ - ω₀·sin(2φ) / (2·rm)
+
+    Derived from Eq 22 by evaluating the integral analytically.
+    """
+    return phi - w0 * math.sin(2.0 * phi) / (2.0 * rm)
+
+
+def eq24_transmission_ratio(z_f: float, z_c: float) -> float:
+    """Eq 24: Transmission ratio relationship.
+
+    z_f / z_c = φ₂ / φ
+
+    Returns the ratio z_f / z_c.
+    """
+    return z_f / z_c
+
+
+def eq25_phi2(phi: float, z_f: float, z_c: float) -> float:
+    """Eq 25: Wave generator rotation angle.
+
+    φ₂ = (z_f / z_c) · φ
+    """
+    return (z_f / z_c) * phi
+
+
+def eq26_gamma(phi1: float, phi2: float) -> float:
+    """Eq 26: Deformation angle of flexspline's deformed endpoint.
+
+    γ = φ₁ - φ₂
+    """
+    return phi1 - phi2
+
+
+def eq27_psi(mu: float, gamma: float) -> float:
+    """Eq 27: Angle between Y_G axis and Y_R axis.
+
+    ϕ = μ + γ
+    """
+    return mu + gamma
+
+
+# ══════════════════════════════════════════════════════════════════
+# Section 2.2 — Coordinate transform & envelope (Eqs 28-30)
+# ══════════════════════════════════════════════════════════════════
+#
+# Transform flexspline tooth profile points from the local tooth
+# frame {O_R - X_R - Y_R} into the fixed circular spline frame
+# {O_G - X_G - Y_G}, then apply the envelope condition to find
+# the conjugate circular spline tooth profile.
+
+def eq28_transform_matrix(psi: float, rho: float, gamma: float):
+    """Eq 28: 3x3 homogeneous transformation matrix M.
+
+    M = [ cos(ϕ)   sin(ϕ)   ρ·sin(γ) ]
+        [-sin(ϕ)   cos(ϕ)   ρ·cos(γ) ]
+        [   0         0         1     ]
+
+    Returns the 3x3 matrix as a tuple of tuples.
+    """
+    cp = math.cos(psi)
+    sp = math.sin(psi)
+    tx = rho * math.sin(gamma)
+    ty = rho * math.cos(gamma)
+    return (
+        (cp,  sp, tx),
+        (-sp, cp, ty),
+        (0.0, 0.0, 1.0),
+    )
+
+
+def eq29_transform(xr: float, yr: float,
+                   psi: float, rho: float, gamma: float) -> tuple[float, float]:
+    """Eq 29: Transform a point from flexspline frame to circular spline frame.
+
+    x_g =  x_r·cos(ϕ) + y_r·sin(ϕ) + ρ·sin(γ)
+    y_g = -x_r·sin(ϕ) + y_r·cos(ϕ) + ρ·cos(γ)
+    """
+    cp = math.cos(psi)
+    sp = math.sin(psi)
+    xg = xr * cp + yr * sp + rho * math.sin(gamma)
+    yg = -xr * sp + yr * cp + rho * math.cos(gamma)
+    return xg, yg
+
+
+def eq30_envelope_condition(dxg_dl: float, dyg_dphi: float,
+                            dyg_dl: float, dxg_dphi: float) -> float:
+    """Eq 30: Envelope conjugate condition.
+
+    ∂x_g/∂l · ∂y_g/∂φ  -  ∂y_g/∂l · ∂x_g/∂φ  =  0
+
+    Returns the residual (zero on the conjugate profile).
+    The four partial derivatives are computed externally via
+    finite differences.
+    """
+    return dxg_dl * dyg_dphi - dyg_dl * dxg_dphi
