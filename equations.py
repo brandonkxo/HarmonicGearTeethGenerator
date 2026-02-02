@@ -201,6 +201,8 @@ def compute_profile(params: dict) -> dict:
         "y1_R": y1_R,
         "x2_R": x2_R,
         "y2_R": y2_R,
+        "r1": r1,
+        "r2": r2,
         "l1": l1,
         "l2": l2,
         "l3": l3,
@@ -414,3 +416,103 @@ def eq30_envelope_condition(dxg_dl: float, dyg_dphi: float,
     finite differences.
     """
     return dxg_dl * dyg_dphi - dyg_dl * dxg_dphi
+
+
+# ══════════════════════════════════════════════════════════════════
+# Eq 30 solver building blocks
+# ══════════════════════════════════════════════════════════════════
+
+def _profile_point_at_l(l: float, prof: dict) -> tuple[float, float]:
+    """Evaluate Eqs 2/4/6 at a single arc-length value *l*.
+
+    Returns (x_r, y_r) in the tooth-local frame {O_R}.
+    *prof* is the dict returned by compute_profile().
+    """
+    alpha = prof["alpha"]
+    delta = prof["delta"]
+    x1_R  = prof["x1_R"]
+    y1_R  = prof["y1_R"]
+    x2_R  = prof["x2_R"]
+    y2_R  = prof["y2_R"]
+    r1    = prof["r1"]
+    r2    = prof["r2"]
+    l1    = prof["l1"]
+    l2    = prof["l2"]
+
+    if l <= l1:
+        # Eq 2 — convex arc AB
+        angle = alpha - l / r1
+        x = r1 * math.cos(angle) + x1_R
+        y = r1 * math.sin(angle) + y1_R
+    elif l <= l2:
+        # Eq 4 — tangent line BC
+        x = r1 * math.cos(delta) + x1_R + (l - l1) * math.sin(delta)
+        y = r1 * math.sin(delta) + y1_R - (l - l1) * math.cos(delta)
+    else:
+        # Eq 6 — concave arc CD
+        angle = delta + (l - l2) / r2
+        x = -r2 * math.cos(angle) + x2_R
+        y = -r2 * math.sin(angle) + y2_R
+    return x, y
+
+
+def _xg_yg_at(l: float, phi: float,
+              prof: dict, params: dict) -> tuple[float, float]:
+    """Compute (x_g, y_g) in the circular-spline frame {O_G} for a
+    flexspline tooth profile point at arc-length *l* and wave-generator
+    angle *phi*.
+
+    Chains: Eqs 2/4/6 → Eqs 14,21,23,25,26,27 → Eq 29.
+    """
+    rm = prof["rm"]
+    w0 = params["w0"]
+    z_f = params["z_f"]
+    z_c = params["z_c"]
+
+    # tooth profile point in {O_R}
+    xr, yr = _profile_point_at_l(l, prof)
+
+    # angular quantities (all functions of phi only)
+    rho   = eq14_rho(phi, rm, w0)
+    mu    = eq21_mu(phi, w0, rm)
+    phi1  = eq23_phi1(phi, w0, rm)
+    phi2  = eq25_phi2(phi, z_f, z_c)
+    gamma = eq26_gamma(phi1, phi2)
+    psi   = eq27_psi(mu, gamma)
+
+    # Eq 29 coordinate transform
+    return eq29_transform(xr, yr, psi, rho, gamma)
+
+
+def eq30_residual_at(l: float, phi: float,
+                     prof: dict, params: dict,
+                     eps_l: float = 1e-7,
+                     eps_phi: float = 1e-7) -> float:
+    """Evaluate the Eq 30 envelope residual at (l, phi) using central
+    finite differences.
+
+    Returns:
+        ∂x_g/∂l · ∂y_g/∂φ  −  ∂y_g/∂l · ∂x_g/∂φ
+
+    The step sizes *eps_l* and *eps_phi* are small perturbations used
+    for the central-difference approximation.
+    """
+    l3 = prof["l3"]
+
+    # ── ∂/∂l  (perturb l, hold phi fixed) ──
+    l_plus  = min(l + eps_l, l3)
+    l_minus = max(l - eps_l, 0.0)
+    dl = l_plus - l_minus
+
+    xg_lp, yg_lp = _xg_yg_at(l_plus,  phi, prof, params)
+    xg_lm, yg_lm = _xg_yg_at(l_minus, phi, prof, params)
+    dxg_dl = (xg_lp - xg_lm) / dl
+    dyg_dl = (yg_lp - yg_lm) / dl
+
+    # ── ∂/∂φ  (perturb phi, hold l fixed) ──
+    xg_pp, yg_pp = _xg_yg_at(l, phi + eps_phi, prof, params)
+    xg_pm, yg_pm = _xg_yg_at(l, phi - eps_phi, prof, params)
+    dxg_dphi = (xg_pp - xg_pm) / (2.0 * eps_phi)
+    dyg_dphi = (yg_pp - yg_pm) / (2.0 * eps_phi)
+
+    return eq30_envelope_condition(dxg_dl, dyg_dphi, dyg_dl, dxg_dphi)
