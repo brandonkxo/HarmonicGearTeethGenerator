@@ -9,7 +9,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from equations import (DEFAULTS, PARAM_LABELS, PARAM_ORDER, PITCH_RADIUS,
-                       compute_profile)
+                       compute_profile, compute_conjugate_profile)
 
 # ── Viewport settings ──────────────────────────────────────────────
 HALF_VIEW_MM = 1.5
@@ -191,15 +191,85 @@ class Tab21:
 # ── Tab 2.2: Conjugate Circular Spline ────────────────────────────
 
 class Tab22:
-    """Section 2.2 — Conjugate circular spline tooth profile (placeholder)."""
+    """Section 2.2 — Conjugate circular spline tooth profile."""
 
     def __init__(self, parent: ttk.Frame):
         self.frame = parent
 
-        ttk.Label(parent, text="Section 2.2 — Conjugate Circular Spline\n"
-                  "(Not yet implemented)",
-                  font=("Consolas", 11), foreground="grey50",
-                  justify="center").pack(expand=True)
+        # Left: parameters
+        left = ttk.Frame(parent, padding=10)
+        left.pack(side=tk.LEFT, fill=tk.Y)
+
+        ttk.Label(left, text="Conjugate Profile Parameters (mm)",
+                  font=("Consolas", 10, "bold")).grid(
+            row=0, column=0, columnspan=2, pady=(0, 8))
+
+        self.entries: dict[str, tk.StringVar] = {}
+        row = 1
+        for key in PARAM_ORDER:
+            ttk.Label(left, text=PARAM_LABELS[key],
+                      font=("Consolas", 9)).grid(row=row, column=0,
+                                                  sticky="w", padx=(0, 6))
+            var = tk.StringVar(value=str(DEFAULTS[key]))
+            ent = ttk.Entry(left, textvariable=var, width=10,
+                            font=("Consolas", 9))
+            ent.grid(row=row, column=1, pady=2)
+            self.entries[key] = var
+            row += 1
+
+        ttk.Button(left, text="Update", command=self.redraw).grid(
+            row=row, column=0, columnspan=2, pady=10)
+        row += 1
+
+        self.info_var = tk.StringVar(value="Click Update to compute.")
+        ttk.Label(left, textvariable=self.info_var, font=("Consolas", 8),
+                  foreground="grey30", wraplength=200, justify="left").grid(
+            row=row, column=0, columnspan=2, sticky="w")
+
+        # Right: canvas
+        self.canvas = tk.Canvas(parent, width=CANVAS_W, height=CANVAS_H,
+                                bg="white")
+        self.canvas.pack(side=tk.RIGHT, padx=10, pady=10)
+
+    def _read_params(self) -> dict | None:
+        params = {}
+        for key, var in self.entries.items():
+            try:
+                params[key] = float(var.get())
+            except ValueError:
+                self.info_var.set(f"Invalid number for {key}")
+                return None
+        return params
+
+    def redraw(self):
+        c = self.canvas
+        c.delete("all")
+        draw_axes(c)
+
+        params = self._read_params()
+        if params is None:
+            return
+
+        self.info_var.set("Computing...")
+        self.frame.update_idletasks()
+
+        result = compute_conjugate_profile(params)
+        if "error" in result:
+            self.info_var.set(f"Error: {result['error']}")
+            return
+
+        # Draw each branch as a polyline
+        for branch in result["branches"]:
+            draw_segment(c, branch, "#d62728", "")
+            # Mirrored half
+            mirrored = [(-x, y) for x, y in branch]
+            draw_polyline(c, mirrored, "grey50")
+
+        self.info_var.set(
+            f"rp_c = {result['rp_c']:.2f} mm\n"
+            f"Points: {result['n_pts']}\n"
+            f"Branches: {result['n_branches']}"
+        )
 
 
 # ── Main App ───────────────────────────────────────────────────────
