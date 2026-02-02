@@ -516,3 +516,99 @@ def eq30_residual_at(l: float, phi: float,
     dyg_dphi = (yg_pp - yg_pm) / (2.0 * eps_phi)
 
     return eq30_envelope_condition(dxg_dl, dyg_dphi, dyg_dl, dxg_dphi)
+
+
+def compute_conjugate_profile(params: dict,
+                              N_phi: int = 720,
+                              N_l: int = 1000) -> dict:
+    """Solve Eq 30 over a (phi, l) grid to find the conjugate circular-
+    spline tooth profile.
+
+    For each discrete phi value, the Eq 30 residual is evaluated along
+    the full arc-length range [0, l3].  Sign changes indicate zero
+    crossings; linear interpolation pinpoints each root.  The
+    corresponding (x_g, y_g) is computed via Eq 29 and shifted into
+    tooth-local coordinates by subtracting the circular-spline pitch
+    radius from y_g.
+
+    Returns dict with:
+        conjugate_pts  – list of (x, y) in tooth-local CS frame
+        branches       – pts grouped into continuous curves
+        rp_c           – circular-spline pitch radius
+        n_pts / n_branches – counts
+    Or {'error': msg} on failure.
+    """
+    prof = compute_profile(params)
+    if "error" in prof:
+        return prof
+
+    m   = params["m"]
+    z_c = params["z_c"]
+    l3  = prof["l3"]
+
+    rp_c = m * z_c / 2.0  # circular-spline pitch radius
+
+    # Grid spacings
+    phi_min = -math.pi / 2.0
+    phi_max =  math.pi / 2.0
+    dphi_grid = (phi_max - phi_min) / N_phi
+    dl_grid   = l3 / N_l
+
+    # Collect (phi, l_zero, x_local, y_local) for every root found
+    raw_roots: list[tuple[float, float, float, float]] = []
+
+    for i in range(N_phi + 1):
+        phi = phi_min + i * dphi_grid
+
+        # Evaluate residual along l for this phi
+        residuals = []
+        for j in range(N_l + 1):
+            lv = j * dl_grid
+            residuals.append(eq30_residual_at(lv, phi, prof, params))
+
+        # Scan for sign changes → linear interpolation
+        for j in range(N_l):
+            r0 = residuals[j]
+            r1 = residuals[j + 1]
+            if r0 * r1 < 0.0:
+                # fraction of interval where zero crossing occurs
+                frac = abs(r0) / (abs(r0) + abs(r1))
+                l_zero = (j + frac) * dl_grid
+                xg, yg = _xg_yg_at(l_zero, phi, prof, params)
+                raw_roots.append((phi, l_zero, xg, yg - rp_c))
+
+    if not raw_roots:
+        return {"error": "No conjugate points found — check parameters."}
+
+    # ── Cluster roots into branches by l_zero proximity ──
+    # Sort by l_zero, group runs with small gaps, then sort each
+    # cluster by phi so the points trace a smooth curve.
+    raw_roots.sort(key=lambda r: r[1])
+    l_tol = l3 * 0.05
+    clusters: list[list[tuple[float, float, float, float]]] = []
+    current: list[tuple[float, float, float, float]] = [raw_roots[0]]
+    for k in range(1, len(raw_roots)):
+        if abs(raw_roots[k][1] - raw_roots[k - 1][1]) > l_tol:
+            clusters.append(current)
+            current = [raw_roots[k]]
+        else:
+            current.append(raw_roots[k])
+    clusters.append(current)
+
+    # Build branches (sorted by phi within each cluster)
+    branches = []
+    conjugate_pts = []
+    for cluster in clusters:
+        cluster.sort(key=lambda r: r[0])  # sort by phi
+        pts = [(r[2], r[3]) for r in cluster]
+        conjugate_pts.extend(pts)
+        if len(pts) >= 2:
+            branches.append(pts)
+
+    return {
+        "conjugate_pts": conjugate_pts,
+        "branches": branches,
+        "rp_c": rp_c,
+        "n_pts": len(conjugate_pts),
+        "n_branches": len(branches),
+    }
