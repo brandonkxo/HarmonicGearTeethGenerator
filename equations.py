@@ -8,6 +8,8 @@ Computes the double-circular-arc common-tangent flexspline tooth profile
 consisting of three segments: convex arc AB, tangent line BC, concave arc CD.
 """
 import math
+import numpy as np
+from scipy.interpolate import splprep, splev
 
 
 # ── Default parameter values from paper (Section 3.5) ─────────────
@@ -486,8 +488,8 @@ def _xg_yg_at(l: float, phi: float,
 
 def eq30_residual_at(l: float, phi: float,
                      prof: dict, params: dict,
-                     eps_l: float = 1e-7,
-                     eps_phi: float = 1e-7) -> float:
+                     eps_l: float = 1e-5,
+                     eps_phi: float = 1e-5) -> float:
     """Evaluate the Eq 30 envelope residual at (l, phi) using central
     finite differences.
 
@@ -580,6 +582,22 @@ def compute_conjugate_profile(params: dict,
     if not raw_roots:
         return {"error": "No conjugate points found — check parameters."}
 
+    # ── Filter spurious roots outside physical tooth bounds ──
+    # In tooth-local coords y is relative to the CS pitch circle,
+    # so valid points should be within [-hf, ha] with some margin.
+    ha = params["ha"]
+    hf = params["hf"]
+    margin = 0.5 * (ha + hf)
+    y_lo = -(hf + margin)
+    y_hi =  (ha + margin)
+    # x should be within roughly one tooth pitch
+    x_bound = m * math.pi
+    raw_roots = [r for r in raw_roots
+                 if y_lo <= r[3] <= y_hi and abs(r[2]) <= x_bound]
+
+    if not raw_roots:
+        return {"error": "No conjugate points survived filtering — check parameters."}
+
     # ── Cluster roots into branches by l_zero proximity ──
     # Sort by l_zero, group runs with small gaps, then sort each
     # cluster by phi so the points trace a smooth curve.
@@ -612,3 +630,51 @@ def compute_conjugate_profile(params: dict,
         "n_pts": len(conjugate_pts),
         "n_branches": len(branches),
     }
+
+
+# ══════════════════════════════════════════════════════════════════
+# Spline smoothing for conjugate profile branches
+# ══════════════════════════════════════════════════════════════════
+
+def smooth_branch(pts: list[tuple[float, float]],
+                  s: float = 0.001,
+                  num_out: int = 200) -> list[tuple[float, float]]:
+    """Fit a parametric smoothing spline to a single branch.
+
+    Parameters:
+        pts     – list of (x, y) points (must have >= 4 points)
+        s       – smoothing factor (larger = smoother, 0 = interpolate)
+        num_out – number of resampled output points
+
+    Returns a list of (x, y) resampled along the smooth spline,
+    or the original pts if the branch is too short or fitting fails.
+    """
+    if len(pts) < 4:
+        return pts
+    x = np.array([p[0] for p in pts])
+    y = np.array([p[1] for p in pts])
+    try:
+        tck, _ = splprep([x, y], s=s, k=3)
+        u_new = np.linspace(0.0, 1.0, num_out)
+        xs, ys = splev(u_new, tck)
+        return list(zip(xs.tolist(), ys.tolist()))
+    except Exception:
+        return pts
+
+
+def smooth_conjugate_profile(result: dict,
+                             s: float = 0.001,
+                             num_out: int = 200) -> dict:
+    """Apply spline smoothing to each branch of a conjugate profile result.
+
+    Takes the dict returned by compute_conjugate_profile(), adds a
+    'smoothed_branches' key containing the smoothed version of each branch.
+    Returns the same dict (mutated) with the new key.
+    """
+    if "error" in result:
+        return result
+    smoothed = []
+    for branch in result["branches"]:
+        smoothed.append(smooth_branch(branch, s=s, num_out=num_out))
+    result["smoothed_branches"] = smoothed
+    return result

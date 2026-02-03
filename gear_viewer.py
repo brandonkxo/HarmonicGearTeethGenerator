@@ -9,7 +9,8 @@ import tkinter as tk
 from tkinter import ttk
 
 from equations import (DEFAULTS, PARAM_LABELS, PARAM_ORDER, PITCH_RADIUS,
-                       compute_profile, compute_conjugate_profile)
+                       compute_profile, compute_conjugate_profile,
+                       smooth_conjugate_profile)
 
 # ── Viewport settings ──────────────────────────────────────────────
 HALF_VIEW_MM = 1.5
@@ -217,6 +218,15 @@ class Tab22:
             self.entries[key] = var
             row += 1
 
+        # Smoothing factor control
+        ttk.Label(left, text="Smoothing (s)",
+                  font=("Consolas", 9)).grid(row=row, column=0,
+                                              sticky="w", padx=(0, 6))
+        self.smooth_var = tk.StringVar(value="0.001")
+        ttk.Entry(left, textvariable=self.smooth_var, width=10,
+                  font=("Consolas", 9)).grid(row=row, column=1, pady=2)
+        row += 1
+
         ttk.Button(left, text="Update", command=self.redraw).grid(
             row=row, column=0, columnspan=2, pady=10)
         row += 1
@@ -250,6 +260,12 @@ class Tab22:
         if params is None:
             return
 
+        try:
+            s_val = float(self.smooth_var.get())
+        except ValueError:
+            self.info_var.set("Invalid smoothing value")
+            return
+
         self.info_var.set("Computing...")
         self.frame.update_idletasks()
 
@@ -258,17 +274,26 @@ class Tab22:
             self.info_var.set(f"Error: {result['error']}")
             return
 
-        # Draw each branch as a polyline
+        smooth_conjugate_profile(result, s=s_val)
+
+        # Draw raw branch points as faint dots for reference
         for branch in result["branches"]:
-            draw_segment(c, branch, "#d62728", "")
-            # Mirrored half
-            mirrored = [(-x, y) for x, y in branch]
+            for x, y in branch:
+                px, py = mm_to_canvas(x, y)
+                c.create_oval(px - 1, py - 1, px + 1, py + 1,
+                              fill="#f0c0c0", outline="")
+
+        # Draw smoothed branches as solid lines
+        for sbranch in result.get("smoothed_branches", result["branches"]):
+            draw_segment(c, sbranch, "#d62728", "")
+            mirrored = [(-x, y) for x, y in sbranch]
             draw_polyline(c, mirrored, "grey50")
 
         self.info_var.set(
             f"rp_c = {result['rp_c']:.2f} mm\n"
             f"Points: {result['n_pts']}\n"
-            f"Branches: {result['n_branches']}"
+            f"Branches: {result['n_branches']}\n"
+            f"Smoothing s = {s_val}"
         )
 
 
