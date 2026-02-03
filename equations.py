@@ -556,8 +556,19 @@ def compute_conjugate_profile(params: dict,
     dphi_grid = (phi_max - phi_min) / N_phi
     dl_grid   = l3 / N_l
 
-    # Collect (phi, l_zero, x_local, y_local) for every root found
-    raw_roots: list[tuple[float, float, float, float]] = []
+    # Collect (phi, l_zero, x_local, y_local, segment) for every root
+    raw_roots: list[tuple[float, float, float, float, str]] = []
+
+    # Bounds for filtering spurious roots
+    ha = params["ha"]
+    hf = params["hf"]
+    margin = 0.5 * (ha + hf)
+    y_lo = -(hf + margin)
+    y_hi =  (ha + margin)
+    x_bound = m * math.pi
+
+    l1 = prof["l1"]
+    l2 = prof["l2"]
 
     for i in range(N_phi + 1):
         phi = phi_min + i * dphi_grid
@@ -573,59 +584,45 @@ def compute_conjugate_profile(params: dict,
             r0 = residuals[j]
             r1 = residuals[j + 1]
             if r0 * r1 < 0.0:
-                # fraction of interval where zero crossing occurs
                 frac = abs(r0) / (abs(r0) + abs(r1))
                 l_zero = (j + frac) * dl_grid
                 xg, yg = _xg_yg_at(l_zero, phi, prof, params)
-                raw_roots.append((phi, l_zero, xg, yg - rp_c))
+                y_local = yg - rp_c
+
+                # Filter spurious roots outside physical tooth bounds
+                if not (y_lo <= y_local <= y_hi and abs(xg) <= x_bound):
+                    continue
+
+                # Tag by originating tooth segment
+                if l_zero <= l1:
+                    seg = "AB"
+                elif l_zero <= l2:
+                    seg = "BC"
+                else:
+                    seg = "CD"
+                raw_roots.append((phi, l_zero, xg, y_local, seg))
 
     if not raw_roots:
         return {"error": "No conjugate points found — check parameters."}
 
-    # ── Filter spurious roots outside physical tooth bounds ──
-    # In tooth-local coords y is relative to the CS pitch circle,
-    # so valid points should be within [-hf, ha] with some margin.
-    ha = params["ha"]
-    hf = params["hf"]
-    margin = 0.5 * (ha + hf)
-    y_lo = -(hf + margin)
-    y_hi =  (ha + margin)
-    # x should be within roughly one tooth pitch
-    x_bound = m * math.pi
-    raw_roots = [r for r in raw_roots
-                 if y_lo <= r[3] <= y_hi and abs(r[2]) <= x_bound]
-
-    if not raw_roots:
-        return {"error": "No conjugate points survived filtering — check parameters."}
-
-    # ── Cluster roots into branches by l_zero proximity ──
-    # Sort by l_zero, group runs with small gaps, then sort each
-    # cluster by phi so the points trace a smooth curve.
-    raw_roots.sort(key=lambda r: r[1])
-    l_tol = l3 * 0.05
-    clusters: list[list[tuple[float, float, float, float]]] = []
-    current: list[tuple[float, float, float, float]] = [raw_roots[0]]
-    for k in range(1, len(raw_roots)):
-        if abs(raw_roots[k][1] - raw_roots[k - 1][1]) > l_tol:
-            clusters.append(current)
-            current = [raw_roots[k]]
-        else:
-            current.append(raw_roots[k])
-    clusters.append(current)
-
-    # Build branches (sorted by phi within each cluster)
-    branches = []
+    # ── Build segment-keyed branches (sorted by phi) ──
+    seg_branches: dict[str, list[tuple[float, float]]] = {"AB": [], "BC": [], "CD": []}
     conjugate_pts = []
-    for cluster in clusters:
-        cluster.sort(key=lambda r: r[0])  # sort by phi
-        pts = [(r[2], r[3]) for r in cluster]
+
+    for seg_key in ("AB", "BC", "CD"):
+        seg_pts = [r for r in raw_roots if r[4] == seg_key]
+        seg_pts.sort(key=lambda r: r[0])  # sort by phi
+        pts = [(r[2], r[3]) for r in seg_pts]
+        seg_branches[seg_key] = pts
         conjugate_pts.extend(pts)
-        if len(pts) >= 2:
-            branches.append(pts)
+
+    # Legacy 'branches' list (all non-empty segments)
+    branches = [pts for pts in seg_branches.values() if len(pts) >= 2]
 
     return {
         "conjugate_pts": conjugate_pts,
         "branches": branches,
+        "seg_branches": seg_branches,
         "rp_c": rp_c,
         "n_pts": len(conjugate_pts),
         "n_branches": len(branches),
@@ -665,16 +662,22 @@ def smooth_branch(pts: list[tuple[float, float]],
 def smooth_conjugate_profile(result: dict,
                              s: float = 0.001,
                              num_out: int = 200) -> dict:
-    """Apply spline smoothing to each branch of a conjugate profile result.
+    """Apply spline smoothing to each segment branch of a conjugate profile.
 
-    Takes the dict returned by compute_conjugate_profile(), adds a
-    'smoothed_branches' key containing the smoothed version of each branch.
-    Returns the same dict (mutated) with the new key.
+    Adds 'smoothed_seg_branches' dict keyed by segment name ('AB','BC','CD')
+    and legacy 'smoothed_branches' list.
+    Returns the same dict (mutated) with the new keys.
     """
     if "error" in result:
         return result
-    smoothed = []
-    for branch in result["branches"]:
-        smoothed.append(smooth_branch(branch, s=s, num_out=num_out))
-    result["smoothed_branches"] = smoothed
+
+    smoothed_seg: dict[str, list[tuple[float, float]]] = {}
+    for seg_key, pts in result.get("seg_branches", {}).items():
+        smoothed_seg[seg_key] = smooth_branch(pts, s=s, num_out=num_out)
+    result["smoothed_seg_branches"] = smoothed_seg
+
+    # Legacy list form
+    result["smoothed_branches"] = [
+        smooth_branch(b, s=s, num_out=num_out) for b in result["branches"]
+    ]
     return result

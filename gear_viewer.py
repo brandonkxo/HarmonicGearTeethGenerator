@@ -227,6 +227,32 @@ class Tab22:
                   font=("Consolas", 9)).grid(row=row, column=1, pady=2)
         row += 1
 
+        # Segment visibility toggles
+        ttk.Separator(left, orient="horizontal").grid(
+            row=row, column=0, columnspan=2, sticky="ew", pady=6)
+        row += 1
+        ttk.Label(left, text="Show segments",
+                  font=("Consolas", 9, "bold")).grid(
+            row=row, column=0, columnspan=2, sticky="w")
+        row += 1
+
+        self.seg_vars: dict[str, tk.BooleanVar] = {}
+        self.seg_colors = {"AB": "red", "BC": "blue", "CD": "green"}
+        self.seg_labels = {
+            "AB": "AB (convex)",
+            "BC": "BC (tangent)",
+            "CD": "CD (concave)",
+        }
+        for seg_key in ("AB", "BC", "CD"):
+            var = tk.BooleanVar(value=True)
+            cb = tk.Checkbutton(left, text=self.seg_labels[seg_key],
+                                variable=var, font=("Consolas", 9),
+                                fg=self.seg_colors[seg_key],
+                                command=self.redraw)
+            cb.grid(row=row, column=0, columnspan=2, sticky="w")
+            self.seg_vars[seg_key] = var
+            row += 1
+
         ttk.Button(left, text="Update", command=self.redraw).grid(
             row=row, column=0, columnspan=2, pady=10)
         row += 1
@@ -235,6 +261,9 @@ class Tab22:
         ttk.Label(left, textvariable=self.info_var, font=("Consolas", 8),
                   foreground="grey30", wraplength=200, justify="left").grid(
             row=row, column=0, columnspan=2, sticky="w")
+
+        self._last_result = None
+        self._last_params = None
 
         # Right: canvas
         self.canvas = tk.Canvas(parent, width=CANVAS_W, height=CANVAS_H,
@@ -266,33 +295,56 @@ class Tab22:
             self.info_var.set("Invalid smoothing value")
             return
 
-        self.info_var.set("Computing...")
-        self.frame.update_idletasks()
+        # Recompute only if params changed; toggle-only redraws reuse cache
+        if self._last_result is None or self._last_params != (params, s_val):
+            self.info_var.set("Computing...")
+            self.frame.update_idletasks()
 
-        result = compute_conjugate_profile(params)
-        if "error" in result:
-            self.info_var.set(f"Error: {result['error']}")
-            return
+            result = compute_conjugate_profile(params)
+            if "error" in result:
+                self.info_var.set(f"Error: {result['error']}")
+                return
 
-        smooth_conjugate_profile(result, s=s_val)
+            smooth_conjugate_profile(result, s=s_val)
+            self._last_result = result
+            self._last_params = (params, s_val)
+        else:
+            result = self._last_result
 
-        # Draw raw branch points as faint dots for reference
-        for branch in result["branches"]:
-            for x, y in branch:
+        seg_branches = result.get("seg_branches", {})
+        smooth_seg = result.get("smoothed_seg_branches", {})
+
+        # Faint dot colors per segment
+        faint_colors = {"AB": "#f0c0c0", "BC": "#c0c0f0", "CD": "#c0f0c0"}
+
+        seg_counts = {}
+        for seg_key in ("AB", "BC", "CD"):
+            raw = seg_branches.get(seg_key, [])
+            seg_counts[seg_key] = len(raw)
+
+            if not self.seg_vars[seg_key].get():
+                continue
+
+            # Raw points as faint dots
+            for x, y in raw:
                 px, py = mm_to_canvas(x, y)
                 c.create_oval(px - 1, py - 1, px + 1, py + 1,
-                              fill="#f0c0c0", outline="")
+                              fill=faint_colors[seg_key], outline="")
 
-        # Draw smoothed branches as solid lines
-        for sbranch in result.get("smoothed_branches", result["branches"]):
-            draw_segment(c, sbranch, "#d62728", "")
-            mirrored = [(-x, y) for x, y in sbranch]
+            # Smoothed curve as solid line
+            smooth = smooth_seg.get(seg_key, raw)
+            color = self.seg_colors[seg_key]
+            label = self.seg_labels[seg_key]
+            draw_segment(c, smooth, color, label)
+
+            # Mirrored half
+            mirrored = [(-x, y) for x, y in smooth]
             draw_polyline(c, mirrored, "grey50")
 
         self.info_var.set(
             f"rp_c = {result['rp_c']:.2f} mm\n"
-            f"Points: {result['n_pts']}\n"
-            f"Branches: {result['n_branches']}\n"
+            f"AB: {seg_counts['AB']}  BC: {seg_counts['BC']}  "
+            f"CD: {seg_counts['CD']} pts\n"
             f"Smoothing s = {s_val}"
         )
 
