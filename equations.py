@@ -722,3 +722,227 @@ def smooth_conjugate_profile(result: dict,
         smooth_branch(b, s=s, num_out=num_out) for b in result["branches"]
     ]
     return result
+
+
+# ══════════════════════════════════════════════════════════════════
+# Single tooth outline on pitch circle (for Tab 3 — Flexspline)
+# ══════════════════════════════════════════════════════════════════
+
+def _cubic_bezier(p0, p1, p2, p3, n=12):
+    """Sample n+1 points from a cubic Bezier defined by 4 control points."""
+    pts = []
+    for i in range(n + 1):
+        t = i / n
+        u = 1 - t
+        x = u**3*p0[0] + 3*u**2*t*p1[0] + 3*u*t**2*p2[0] + t**3*p3[0]
+        y = u**3*p0[1] + 3*u**2*t*p1[1] + 3*u*t**2*p2[1] + t**3*p3[1]
+        pts.append((x, y))
+    return pts
+
+
+def _g2_blend(p_flank, tan_flank, curv_flank,
+              p_line, tan_line, blend_len=None):
+    """Build a cubic Bezier that matches G0+G1 at both ends and
+    approximates G2 at the flank end.
+
+    Parameters:
+        p_flank    – (x,y) endpoint on the flank curve
+        tan_flank  – (tx,ty) unit tangent at flank endpoint (pointing into blend)
+        curv_flank – scalar curvature at flank endpoint (1/radius, signed)
+        p_line     – (x,y) endpoint on the root line
+        tan_line   – (tx,ty) unit tangent at line endpoint (pointing into blend)
+        blend_len  – characteristic length for control-arm sizing
+
+    Returns list of (x,y) sampled from the Bezier.
+    """
+    if blend_len is None:
+        dx = p_line[0] - p_flank[0]
+        dy = p_line[1] - p_flank[1]
+        blend_len = math.sqrt(dx*dx + dy*dy)
+    if blend_len < 1e-12:
+        return [p_flank, p_line]
+
+    # Arm length: ~1/3 of chord for nice G2 match
+    arm = blend_len / 3.0
+
+    # If curvature is significant, adjust the flank arm to better match G2
+    if abs(curv_flank) > 1e-6:
+        # For a cubic Bezier, curvature at t=0 is:
+        #   kappa = (2/3) * |n x (P1-P0)| / |P1-P0|^2
+        # We solve for arm length that yields the desired curvature
+        desired_arm = max(arm, 2.0 / (3.0 * abs(curv_flank) + 1e-12))
+        arm_flank = min(desired_arm, blend_len * 0.45)
+    else:
+        arm_flank = arm
+
+    arm_line = arm
+
+    cp0 = p_flank
+    cp1 = (p_flank[0] + arm_flank * tan_flank[0],
+           p_flank[1] + arm_flank * tan_flank[1])
+    cp3 = p_line
+    cp2 = (p_line[0] + arm_line * tan_line[0],
+           p_line[1] + arm_line * tan_line[1])
+
+    return _cubic_bezier(cp0, cp1, cp2, cp3, n=16)
+
+
+def _estimate_tangent_and_curvature(pts, end="last"):
+    """Estimate unit tangent and curvature at the start or end of a point list.
+
+    end="last"  → tangent points outward from the last point (away from curve)
+    end="first" → tangent points outward from the first point
+    """
+    if len(pts) < 3:
+        if len(pts) == 2:
+            dx = pts[1][0] - pts[0][0]
+            dy = pts[1][1] - pts[0][1]
+            mag = math.sqrt(dx*dx + dy*dy)
+            if mag < 1e-15:
+                return (0, -1), 0.0
+            t = (dx/mag, dy/mag)
+            if end == "last":
+                return t, 0.0
+            else:
+                return (-t[0], -t[1]), 0.0
+        return (0, -1), 0.0
+
+    if end == "last":
+        p0 = pts[-3]
+        p1 = pts[-2]
+        p2 = pts[-1]
+    else:
+        p2 = pts[0]
+        p1 = pts[1]
+        p0 = pts[2]
+
+    # Tangent from p1→p2
+    dx = p2[0] - p1[0]
+    dy = p2[1] - p1[1]
+    mag = math.sqrt(dx*dx + dy*dy)
+    if mag < 1e-15:
+        return (0, -1), 0.0
+    tan = (dx/mag, dy/mag)
+
+    # Curvature via three-point circle
+    ax, ay = p0
+    bx, by = p1
+    cx, cy = p2
+    d = 2 * (ax*(by - cy) + bx*(cy - ay) + cx*(ay - by))
+    if abs(d) < 1e-15:
+        return tan, 0.0
+    # radius of circumscribed circle
+    ab = math.sqrt((bx-ax)**2 + (by-ay)**2)
+    bc = math.sqrt((cx-bx)**2 + (cy-by)**2)
+    ca = math.sqrt((ax-cx)**2 + (ay-cy)**2)
+    area = abs(d) / 2
+    R = (ab * bc * ca) / (4 * area) if area > 1e-15 else 1e12
+    curv = 1.0 / R
+
+    return tan, curv
+
+
+def build_single_tooth_outline(params: dict) -> dict:
+    """Build the complete outline of one flexspline tooth placed on the
+    pitch circle, including G2 blends at the root.
+
+    Returns dict with:
+        tooth_xy     – list of (X, Y) in Cartesian coords on the pitch circle
+        right_flank  – right flank points (local coords before polar transform)
+        left_flank   – left flank points (local coords)
+        rp, rm, ds   – radii for reference circles
+        ha, hf       – addendum / dedendum heights
+    Or {"error": msg} on failure.
+    """
+    result = compute_profile(params)
+    if "error" in result:
+        return result
+
+    m   = params["m"]
+    z_f = params["z_f"]
+    rp  = m * z_f / 2.0
+    ha  = params["ha"]
+    hf  = params["hf"]
+    ds  = result["ds"]
+    rm  = result["rm"]
+
+    # ── Right flank: A→B→C→D (addendum to dedendum) ──
+    right_flank = list(result["pts_AB"]) + list(result["pts_BC"]) + list(result["pts_CD"])
+
+    # ── Left flank: mirror of right, reversed (dedendum to addendum) ──
+    left_flank = [(-x, y) for x, y in reversed(right_flank)]
+
+    # ── Root tangent line endpoints ──
+    pt_D = right_flank[-1]   # bottom of right flank
+    pt_Dp = left_flank[0]    # bottom of left flank (mirror of D)
+
+    # ── Tangent/curvature at flank endpoints ──
+    # Right flank end (point D): tangent direction going into root
+    tan_R, curv_R = _estimate_tangent_and_curvature(right_flank, end="last")
+
+    # Left flank start (point D'): tangent direction going away from root
+    tan_L, curv_L = _estimate_tangent_and_curvature(left_flank, end="first")
+
+    # ── Root tangent line (straight at dedendum level) ──
+    # Sample a few points along the root between D and D'
+    n_root = 10
+    root_line = []
+    for i in range(n_root + 1):
+        frac = i / n_root
+        x = pt_D[0] + frac * (pt_Dp[0] - pt_D[0])
+        y = pt_D[1] + frac * (pt_Dp[1] - pt_D[1])
+        root_line.append((x, y))
+
+    # ── Root tangent directions (pointing inward from each end) ──
+    root_dx = pt_Dp[0] - pt_D[0]
+    root_dy = pt_Dp[1] - pt_D[1]
+    root_mag = math.sqrt(root_dx**2 + root_dy**2)
+    if root_mag < 1e-15:
+        root_tan = (0, 0)
+    else:
+        root_tan = (root_dx/root_mag, root_dy/root_mag)
+
+    # ── G2 blend: right flank → root line ──
+    blend_right = _g2_blend(
+        pt_D, tan_R, curv_R,
+        root_line[1], (-root_tan[0], -root_tan[1]),  # line tangent points back toward D
+    )
+
+    # ── G2 blend: root line → left flank ──
+    blend_left = _g2_blend(
+        root_line[-2], root_tan, 0.0,
+        pt_Dp, (-tan_L[0], -tan_L[1]),  # flank tangent reversed (pointing into blend)
+    )
+
+    # ── Assemble full outline in local coords ──
+    # right flank (skip last pt, blend starts there)
+    local_outline = list(right_flank[:-1])
+    # G2 blend into root
+    local_outline.extend(blend_right)
+    # root line middle (skip first and last, covered by blends)
+    local_outline.extend(root_line[2:-2])
+    # G2 blend out of root
+    local_outline.extend(blend_left)
+    # left flank (skip first pt, blend ends there)
+    local_outline.extend(left_flank[1:])
+
+    # ── Transform local (x, y) → polar → Cartesian on pitch circle ──
+    tooth_xy = []
+    for x_loc, y_loc in local_outline:
+        r = rm + y_loc
+        theta = x_loc / rp
+        X = r * math.sin(theta)
+        Y = r * math.cos(theta)
+        tooth_xy.append((X, Y))
+
+    return {
+        "tooth_xy": tooth_xy,
+        "local_outline": local_outline,
+        "right_flank": right_flank,
+        "left_flank": left_flank,
+        "rp": rp,
+        "rm": rm,
+        "ds": ds,
+        "ha": ha,
+        "hf": hf,
+    }

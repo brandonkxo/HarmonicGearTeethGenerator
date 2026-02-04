@@ -11,7 +11,7 @@ from tkinter import ttk, filedialog
 
 from equations import (DEFAULTS, PARAM_LABELS, PARAM_ORDER, PITCH_RADIUS,
                        compute_profile, compute_conjugate_profile,
-                       smooth_conjugate_profile)
+                       smooth_conjugate_profile, build_single_tooth_outline)
 
 # ── Viewport settings ──────────────────────────────────────────────
 HALF_VIEW_MM = 1.5
@@ -405,6 +405,275 @@ class Tab22:
         )
 
 
+# ── Tab 3: Flexspline Full Geometry ────────────────────────────────
+
+class TabFlexspline:
+    """Flexspline — single tooth on pitch circle with G2 root blends."""
+
+    FS_CANVAS = 600   # canvas pixel size
+    FS_MARGIN = 50
+
+    def __init__(self, parent: ttk.Frame):
+        self.frame = parent
+
+        # Left: parameters (synced from Tab 2.1)
+        left = ttk.Frame(parent, padding=10)
+        left.pack(side=tk.LEFT, fill=tk.Y)
+
+        ttk.Label(left, text="Flexspline Tooth on Circle",
+                  font=("Consolas", 10, "bold")).grid(
+            row=0, column=0, columnspan=2, pady=(0, 8))
+
+        self.entries: dict[str, tk.StringVar] = {}
+        row = 1
+        for key in PARAM_ORDER:
+            ttk.Label(left, text=PARAM_LABELS[key],
+                      font=("Consolas", 9)).grid(row=row, column=0,
+                                                  sticky="w", padx=(0, 6))
+            var = tk.StringVar(value=str(DEFAULTS[key]))
+            ent = ttk.Entry(left, textvariable=var, width=10,
+                            font=("Consolas", 9))
+            ent.grid(row=row, column=1, pady=2)
+            self.entries[key] = var
+            row += 1
+
+        btn_frame = ttk.Frame(left)
+        btn_frame.grid(row=row, column=0, columnspan=2, pady=10)
+        ttk.Button(btn_frame, text="Update", command=self.redraw).pack(
+            side=tk.LEFT, padx=(0, 6))
+        self._zoomed = False
+        self._zoom_btn = ttk.Button(btn_frame, text="Zoom In",
+                                    command=self._toggle_zoom)
+        self._zoom_btn.pack(side=tk.LEFT)
+        row += 1
+
+        self.info_var = tk.StringVar(value="Click Update to draw tooth.")
+        ttk.Label(left, textvariable=self.info_var, font=("Consolas", 8),
+                  foreground="grey30", wraplength=200, justify="left").grid(
+            row=row, column=0, columnspan=2, sticky="w")
+
+        # Right: canvas
+        cw = self.FS_CANVAS + self.FS_MARGIN + 30
+        ch = self.FS_CANVAS + self.FS_MARGIN + 30
+        self.canvas = tk.Canvas(parent, width=cw, height=ch, bg="white")
+        self.canvas.pack(side=tk.RIGHT, padx=10, pady=10)
+
+    def sync_from(self, tab21: Tab21):
+        for key in PARAM_ORDER:
+            if key in tab21.entries and key in self.entries:
+                self.entries[key].set(tab21.entries[key].get())
+
+    def _toggle_zoom(self):
+        self._zoomed = not self._zoomed
+        self._zoom_btn.config(text="Zoom Out" if self._zoomed else "Zoom In")
+        self.redraw()
+
+    def _read_params(self) -> dict | None:
+        params = {}
+        for key, var in self.entries.items():
+            try:
+                params[key] = float(var.get())
+            except ValueError:
+                self.info_var.set(f"Invalid number for {key}")
+                return None
+        return params
+
+    def redraw(self):
+        c = self.canvas
+        c.delete("all")
+
+        params = self._read_params()
+        if params is None:
+            return
+
+        result = build_single_tooth_outline(params)
+        if "error" in result:
+            self.info_var.set(f"Error: {result['error']}")
+            return
+
+        rp = result["rp"]
+        rm = result["rm"]
+        ds = result["ds"]
+        ha = result["ha"]
+        hf = result["hf"]
+        tooth_xy = result["tooth_xy"]
+
+        # Reference radii
+        r_ded = rm + ds             # dedendum circle radius
+        r_pit = rm + ds + hf        # pitch circle radius (== rp)
+        r_add = rm + ds + hf + ha   # addendum circle radius
+
+        if not tooth_xy:
+            self.info_var.set("No tooth points generated.")
+            return
+
+        plot_px = self.FS_CANVAS
+        margin = self.FS_MARGIN
+
+        if self._zoomed:
+            # ── Zoomed viewport: tight bbox around tooth + padding ──
+            xs = [p[0] for p in tooth_xy]
+            ys = [p[1] for p in tooth_xy]
+            pad = (ha + hf) * 0.8
+            x_min, x_max = min(xs) - pad, max(xs) + pad
+            y_min, y_max = min(ys) - pad, max(ys) + pad
+            view_w = x_max - x_min
+            view_h = y_max - y_min
+            half_view = max(view_w, view_h) / 2.0
+            cx_view = (x_min + x_max) / 2.0
+            cy_view = (y_min + y_max) / 2.0
+        else:
+            # ── Full viewport: centered at origin, 120% of pitch diameter ──
+            half_view = rp * 1.2
+            cx_view = 0.0
+            cy_view = 0.0
+
+        px_per_mm = plot_px / (2.0 * half_view)
+
+        # Canvas origin (where cx_view, cy_view maps to canvas center)
+        ox = margin + plot_px / 2.0
+        oy = plot_px / 2.0
+
+        def to_px(x_mm, y_mm):
+            return (ox + (x_mm - cx_view) * px_per_mm,
+                    oy - (y_mm - cy_view) * px_per_mm)
+
+        # ── Draw axes ──
+        # Horizontal axis (y == cy_view line)
+        ax_y_px = oy - (0 - cy_view) * px_per_mm
+        if 0 <= ax_y_px <= plot_px:
+            c.create_line(margin, ax_y_px, margin + plot_px, ax_y_px,
+                          fill="grey70")
+        # Vertical axis (x == cx_view line)
+        ax_x_px = ox + (0 - cx_view) * px_per_mm
+        if margin <= ax_x_px <= margin + plot_px:
+            c.create_line(ax_x_px, 0, ax_x_px, plot_px, fill="grey70")
+
+        # Choose a nice tick interval based on half_view
+        # Aim for roughly 8-12 ticks across the full range
+        raw_step = (2 * half_view) / 10.0
+        # Snap to a "nice" number: 1, 2, 5, 10, 20, 50 ...
+        mag = 10 ** math.floor(math.log10(max(raw_step, 1e-12)))
+        candidates = [mag, 2 * mag, 5 * mag, 10 * mag]
+        tick_step = min(candidates, key=lambda s: abs(s - raw_step))
+        tick_fmt = f"{{:.{max(0, -math.floor(math.log10(max(tick_step, 1e-12))))}f}}"
+
+        # Visible mm range
+        v_lo = cx_view - half_view
+        v_hi = cx_view + half_view
+
+        # Snap starting tick to a multiple of tick_step
+        v_start = math.floor(v_lo / tick_step) * tick_step
+
+        # Draw tick marks and labels
+        v = v_start
+        while v <= v_hi + 1e-9:
+            # X-axis ticks (drawn on the horizontal axis line)
+            px_t, _ = to_px(v, 0)
+            if margin <= px_t <= margin + plot_px and 0 <= ax_y_px <= plot_px:
+                c.create_line(px_t, ax_y_px - 3, px_t, ax_y_px + 3,
+                              fill="grey70")
+                c.create_text(px_t, ax_y_px + 14,
+                              text=tick_fmt.format(v), font=("Consolas", 7))
+            v += tick_step
+
+        v_lo_y = cy_view - half_view
+        v_hi_y = cy_view + half_view
+        v = math.floor(v_lo_y / tick_step) * tick_step
+        while v <= v_hi_y + 1e-9:
+            # Y-axis ticks (drawn on the vertical axis line)
+            _, py_t = to_px(0, v)
+            if 0 <= py_t <= plot_px and margin <= ax_x_px <= margin + plot_px:
+                c.create_line(ax_x_px - 3, py_t, ax_x_px + 3, py_t,
+                              fill="grey70")
+                c.create_text(ax_x_px - 22, py_t,
+                              text=tick_fmt.format(v), font=("Consolas", 7),
+                              anchor="e")
+            v += tick_step
+
+        # Axis labels
+        c.create_text(margin + plot_px / 2, plot_px + 30,
+                      text="X (mm)", font=("Consolas", 9, "bold"))
+        c.create_text(14, plot_px / 2, text="Y\n(mm)",
+                      font=("Consolas", 9, "bold"))
+
+        # ── Draw reference circles ──
+        # When zoomed, only draw arcs spanning the visible angular range
+        if self._zoomed:
+            theta_span = 2.0 * half_view / rp * 1.5
+            theta_center = math.atan2(cx_view, cy_view)
+            n_arc = 200
+            for radius, color, label in [
+                (r_add, "#9999ff", "Addendum"),
+                (r_pit, "#66cc66", "Pitch"),
+                (r_ded, "#ff9999", "Dedendum"),
+            ]:
+                arc_coords = []
+                for i in range(n_arc + 1):
+                    th = theta_center - theta_span/2 + theta_span * i / n_arc
+                    ax = radius * math.sin(th)
+                    ay = radius * math.cos(th)
+                    px, py = to_px(ax, ay)
+                    arc_coords.extend([px, py])
+                if len(arc_coords) >= 4:
+                    c.create_line(*arc_coords, fill=color, dash=(4, 3), width=1)
+                lx, ly = arc_coords[-2], arc_coords[-1]
+                c.create_text(lx + 4, ly, text=label,
+                              font=("Consolas", 7), fill=color, anchor="w")
+        else:
+            n_circ = 360
+            for radius, color, label in [
+                (r_add, "#9999ff", "Addendum"),
+                (r_pit, "#66cc66", "Pitch"),
+                (r_ded, "#ff9999", "Dedendum"),
+            ]:
+                circ_coords = []
+                for i in range(n_circ + 1):
+                    th = 2 * math.pi * i / n_circ
+                    cx_mm = radius * math.sin(th)
+                    cy_mm = radius * math.cos(th)
+                    px, py = to_px(cx_mm, cy_mm)
+                    circ_coords.extend([px, py])
+                if len(circ_coords) >= 4:
+                    c.create_line(*circ_coords, fill=color, dash=(4, 3), width=1)
+                lx, ly = to_px(0, radius)
+                c.create_text(lx + 4, ly - 8, text=label,
+                              font=("Consolas", 7), fill=color, anchor="w")
+
+        # ── Draw tooth outline ──
+        if len(tooth_xy) >= 2:
+            coords = []
+            for X, Y in tooth_xy:
+                px, py = to_px(X, Y)
+                coords.extend([px, py])
+            c.create_line(*coords, fill="#222222", width=2, smooth=False)
+
+        # ── Close the tip: straight line from last point to first ──
+        if len(tooth_xy) >= 2:
+            px1, py1 = to_px(tooth_xy[-1][0], tooth_xy[-1][1])
+            px2, py2 = to_px(tooth_xy[0][0], tooth_xy[0][1])
+            c.create_line(px1, py1, px2, py2, fill="#222222", width=2)
+
+        # ── Info ──
+        self.info_var.set(
+            f"rp = {rp:.2f} mm   rm = {rm:.4f} mm\n"
+            f"r_add = {r_add:.4f}  r_ded = {r_ded:.4f}\n"
+            f"Tooth points: {len(tooth_xy)}\n"
+            f"ha = {ha:.3f}  hf = {hf:.3f}  ds = {ds:.4f}"
+        )
+
+
+# ── Tab 4: Circular Spline Full Geometry ──────────────────────────
+
+class TabCircularSpline:
+    """Full circular spline gear — conjugate tooth profile patterned around the ring."""
+
+    def __init__(self, parent: ttk.Frame):
+        self.frame = parent
+        ttk.Label(parent, text="Circular Spline — full geometry (coming soon)",
+                  font=("Consolas", 10)).pack(padx=20, pady=20)
+
+
 # ── Main App ───────────────────────────────────────────────────────
 
 class App:
@@ -418,20 +687,31 @@ class App:
 
         tab1_frame = ttk.Frame(notebook)
         tab2_frame = ttk.Frame(notebook)
+        tab3_frame = ttk.Frame(notebook)
+        tab4_frame = ttk.Frame(notebook)
 
-        notebook.add(tab1_frame, text=" 2.1 Flexspline Profile ")
-        notebook.add(tab2_frame, text=" 2.2 Conjugate Circular Spline ")
+        notebook.add(tab1_frame, text=" 2.1 Flexspline Tooth ")
+        notebook.add(tab2_frame, text=" 2.2 Conjugate Circular Spline Tooth ")
+        notebook.add(tab3_frame, text=" Flexspline ")
+        notebook.add(tab4_frame, text=" Circular Spline ")
 
         self.tab21 = Tab21(tab1_frame)
         self.tab22 = Tab22(tab2_frame)
+        self.tab_fs = TabFlexspline(tab3_frame)
+        self.tab_cs = TabCircularSpline(tab4_frame)
 
         notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
         self._notebook = notebook
         self._tab2_frame = tab2_frame
+        self._tab3_frame = tab3_frame
+        self._tab4_frame = tab4_frame
 
     def _on_tab_changed(self, event):
-        if self._notebook.select() == str(self._tab2_frame):
+        selected = self._notebook.select()
+        if selected == str(self._tab2_frame):
             self.tab22.sync_from(self.tab21)
+        elif selected == str(self._tab3_frame):
+            self.tab_fs.sync_from(self.tab21)
 
 
 def main():
