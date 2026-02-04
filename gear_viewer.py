@@ -355,9 +355,6 @@ class Tab22:
 
         seg_branches = result.get("seg_branches", {})
 
-        # Faint dot colors per segment
-        faint_colors = {"AB": "#f0c0c0", "BC": "#c0c0f0", "CD": "#c0f0c0"}
-
         seg_counts = {}
         for seg_key in ("AB", "BC", "CD"):
             raw = seg_branches.get(seg_key, [])
@@ -366,11 +363,12 @@ class Tab22:
             if not self.seg_vars[seg_key].get():
                 continue
 
-            # Raw points as faint dots
+            # Raw envelope points as colored dots
+            color = self.seg_colors[seg_key]
             for x, y in raw:
                 px, py = mm_to_canvas(x, y)
-                c.create_oval(px - 1, py - 1, px + 1, py + 1,
-                              fill=faint_colors[seg_key], outline="")
+                c.create_oval(px - 2, py - 2, px + 2, py + 2,
+                              fill=color, outline="")
 
         # Unified B-spline flank
         flank = result.get("smoothed_flank", [])
