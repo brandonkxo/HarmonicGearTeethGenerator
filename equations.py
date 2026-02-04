@@ -872,59 +872,8 @@ def build_single_tooth_outline(params: dict) -> dict:
     # ── Left flank: mirror of right, reversed (dedendum to addendum) ──
     left_flank = [(-x, y) for x, y in reversed(right_flank)]
 
-    # ── Root tangent line endpoints ──
-    pt_D = right_flank[-1]   # bottom of right flank
-    pt_Dp = left_flank[0]    # bottom of left flank (mirror of D)
-
-    # ── Tangent/curvature at flank endpoints ──
-    # Right flank end (point D): tangent direction going into root
-    tan_R, curv_R = _estimate_tangent_and_curvature(right_flank, end="last")
-
-    # Left flank start (point D'): tangent direction going away from root
-    tan_L, curv_L = _estimate_tangent_and_curvature(left_flank, end="first")
-
-    # ── Root tangent line (straight at dedendum level) ──
-    # Sample a few points along the root between D and D'
-    n_root = 10
-    root_line = []
-    for i in range(n_root + 1):
-        frac = i / n_root
-        x = pt_D[0] + frac * (pt_Dp[0] - pt_D[0])
-        y = pt_D[1] + frac * (pt_Dp[1] - pt_D[1])
-        root_line.append((x, y))
-
-    # ── Root tangent directions (pointing inward from each end) ──
-    root_dx = pt_Dp[0] - pt_D[0]
-    root_dy = pt_Dp[1] - pt_D[1]
-    root_mag = math.sqrt(root_dx**2 + root_dy**2)
-    if root_mag < 1e-15:
-        root_tan = (0, 0)
-    else:
-        root_tan = (root_dx/root_mag, root_dy/root_mag)
-
-    # ── G2 blend: right flank → root line ──
-    blend_right = _g2_blend(
-        pt_D, tan_R, curv_R,
-        root_line[1], (-root_tan[0], -root_tan[1]),  # line tangent points back toward D
-    )
-
-    # ── G2 blend: root line → left flank ──
-    blend_left = _g2_blend(
-        root_line[-2], root_tan, 0.0,
-        pt_Dp, (-tan_L[0], -tan_L[1]),  # flank tangent reversed (pointing into blend)
-    )
-
-    # ── Assemble full outline in local coords ──
-    # right flank (skip last pt, blend starts there)
-    local_outline = list(right_flank[:-1])
-    # G2 blend into root
-    local_outline.extend(blend_right)
-    # root line middle (skip first and last, covered by blends)
-    local_outline.extend(root_line[2:-2])
-    # G2 blend out of root
-    local_outline.extend(blend_left)
-    # left flank (skip first pt, blend ends there)
-    local_outline.extend(left_flank[1:])
+    # ── Assemble outline: right flank + left flank (open at root) ──
+    local_outline = list(right_flank) + list(left_flank)
 
     # ── Transform local (x, y) → polar → Cartesian on pitch circle ──
     tooth_xy = []
@@ -940,9 +889,101 @@ def build_single_tooth_outline(params: dict) -> dict:
         "local_outline": local_outline,
         "right_flank": right_flank,
         "left_flank": left_flank,
+        "split": len(right_flank),
         "rp": rp,
         "rm": rm,
         "ds": ds,
         "ha": ha,
         "hf": hf,
+    }
+
+
+def build_full_flexspline(params: dict, n_ded_arc: int = 8) -> dict:
+    """Pattern the flexspline tooth around the full pitch circle.
+
+    Produces one continuous polyline chain:
+      ... left_flank_i → tip_i → right_flank_i → ded_arc → left_flank_{i+1} → ...
+
+    The dedendum arc connects the right flank bottom (D) of tooth i
+    to the left flank bottom (D') of tooth i+1 along the dedendum circle.
+
+    Returns dict with:
+        chain_xy  – list of (X, Y) forming the continuous outline
+        rp, rm, ds, ha, hf – geometry references
+    Or {"error": msg} on failure.
+    """
+    result = compute_profile(params)
+    if "error" in result:
+        return result
+
+    m   = params["m"]
+    z_f = int(params["z_f"])
+    rp  = m * z_f / 2.0
+    ha  = params["ha"]
+    hf  = params["hf"]
+    ds  = result["ds"]
+    rm  = result["rm"]
+
+    # Single tooth flanks in local coords
+    right_flank = list(result["pts_AB"]) + list(result["pts_BC"]) + list(result["pts_CD"])
+    left_flank = [(-x, y) for x, y in reversed(right_flank)]
+
+    # Dedendum radius
+    r_ded = rm + ds
+
+    # Angular pitch
+    pitch_angle = 2.0 * math.pi / z_f
+
+    def local_to_polar(x_loc, y_loc, tooth_offset_angle):
+        """Transform local tooth coords to Cartesian on the circle."""
+        r = rm + y_loc
+        theta = x_loc / rp + tooth_offset_angle
+        return r * math.sin(theta), r * math.cos(theta)
+
+    # Angular positions of D (right flank bottom) and D' (left flank bottom)
+    # in the local tooth frame (before adding tooth offset)
+    pt_D = right_flank[-1]     # bottom of right flank
+    pt_Dp = left_flank[0]      # bottom of left flank
+    theta_D  = pt_D[0] / rp    # angular offset of D from tooth center
+    theta_Dp = pt_Dp[0] / rp   # angular offset of D' from tooth center
+
+    chain_xy = []
+
+    for i in range(z_f):
+        angle_i = i * pitch_angle
+
+        # Left flank: D' → A' (dedendum up to addendum)
+        for x_loc, y_loc in left_flank:
+            chain_xy.append(local_to_polar(x_loc, y_loc, angle_i))
+
+        # Tip line is implicit — last point of left_flank (A') connects
+        # to first point of right_flank (A) in the polyline
+
+        # Right flank: A → D (addendum down to dedendum)
+        for x_loc, y_loc in right_flank:
+            chain_xy.append(local_to_polar(x_loc, y_loc, angle_i))
+
+        # Dedendum arc: D of tooth i → D' of tooth i+1
+        next_i = (i + 1) % z_f
+        angle_next = next_i * pitch_angle
+        theta_start = theta_D + angle_i
+        theta_end   = theta_Dp + angle_next
+
+        # Handle wrap-around
+        if theta_end < theta_start:
+            theta_end += 2.0 * math.pi
+
+        for j in range(1, n_ded_arc + 1):
+            frac = j / n_ded_arc
+            th = theta_start + frac * (theta_end - theta_start)
+            chain_xy.append((r_ded * math.sin(th), r_ded * math.cos(th)))
+
+    return {
+        "chain_xy": chain_xy,
+        "rp": rp,
+        "rm": rm,
+        "ds": ds,
+        "ha": ha,
+        "hf": hf,
+        "z_f": z_f,
     }

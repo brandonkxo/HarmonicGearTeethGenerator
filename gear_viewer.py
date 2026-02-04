@@ -11,7 +11,8 @@ from tkinter import ttk, filedialog
 
 from equations import (DEFAULTS, PARAM_LABELS, PARAM_ORDER, PITCH_RADIUS,
                        compute_profile, compute_conjugate_profile,
-                       smooth_conjugate_profile, build_single_tooth_outline)
+                       smooth_conjugate_profile, build_single_tooth_outline,
+                       build_full_flexspline)
 
 # ── Viewport settings ──────────────────────────────────────────────
 HALF_VIEW_MM = 1.5
@@ -486,24 +487,29 @@ class TabFlexspline:
         if params is None:
             return
 
-        result = build_single_tooth_outline(params)
-        if "error" in result:
-            self.info_var.set(f"Error: {result['error']}")
+        # Build both: full gear for overview, single tooth for zoom
+        full = build_full_flexspline(params)
+        if "error" in full:
+            self.info_var.set(f"Error: {full['error']}")
+            return
+        single = build_single_tooth_outline(params)
+        if "error" in single:
+            self.info_var.set(f"Error: {single['error']}")
             return
 
-        rp = result["rp"]
-        rm = result["rm"]
-        ds = result["ds"]
-        ha = result["ha"]
-        hf = result["hf"]
-        tooth_xy = result["tooth_xy"]
+        rp = full["rp"]
+        rm = full["rm"]
+        ds = full["ds"]
+        ha = full["ha"]
+        hf = full["hf"]
+        z_f = full["z_f"]
 
         # Reference radii
         r_ded = rm + ds             # dedendum circle radius
         r_pit = rm + ds + hf        # pitch circle radius (== rp)
         r_add = rm + ds + hf + ha   # addendum circle radius
 
-        if not tooth_xy:
+        if not full["chain_xy"]:
             self.info_var.set("No tooth points generated.")
             return
 
@@ -511,7 +517,8 @@ class TabFlexspline:
         margin = self.FS_MARGIN
 
         if self._zoomed:
-            # ── Zoomed viewport: tight bbox around tooth + padding ──
+            # ── Zoomed viewport: tight bbox around single tooth + padding ──
+            tooth_xy = single["tooth_xy"]
             xs = [p[0] for p in tooth_xy]
             ys = [p[1] for p in tooth_xy]
             pad = (ha + hf) * 0.8
@@ -640,25 +647,39 @@ class TabFlexspline:
                 c.create_text(lx + 4, ly - 8, text=label,
                               font=("Consolas", 7), fill=color, anchor="w")
 
-        # ── Draw tooth outline ──
-        if len(tooth_xy) >= 2:
-            coords = []
-            for X, Y in tooth_xy:
-                px, py = to_px(X, Y)
-                coords.extend([px, py])
-            c.create_line(*coords, fill="#222222", width=2, smooth=False)
-
-        # ── Close the tip: straight line from last point to first ──
-        if len(tooth_xy) >= 2:
-            px1, py1 = to_px(tooth_xy[-1][0], tooth_xy[-1][1])
-            px2, py2 = to_px(tooth_xy[0][0], tooth_xy[0][1])
-            c.create_line(px1, py1, px2, py2, fill="#222222", width=2)
+        # ── Draw gear outline ──
+        if self._zoomed:
+            # Single tooth: two separate flanks + tip line
+            tooth_xy = single["tooth_xy"]
+            split = single["split"]
+            for flank in (tooth_xy[:split], tooth_xy[split:]):
+                if len(flank) >= 2:
+                    coords = []
+                    for X, Y in flank:
+                        px, py = to_px(X, Y)
+                        coords.extend([px, py])
+                    c.create_line(*coords, fill="#222222", width=2,
+                                  smooth=False)
+            if len(tooth_xy) >= 2:
+                px1, py1 = to_px(tooth_xy[0][0], tooth_xy[0][1])
+                px2, py2 = to_px(tooth_xy[-1][0], tooth_xy[-1][1])
+                c.create_line(px1, py1, px2, py2, fill="#222222", width=2)
+        else:
+            # Full gear: one continuous chain
+            chain = full["chain_xy"]
+            if len(chain) >= 2:
+                coords = []
+                for X, Y in chain:
+                    px, py = to_px(X, Y)
+                    coords.extend([px, py])
+                c.create_line(*coords, fill="#222222", width=2, smooth=False)
 
         # ── Info ──
+        n_pts = len(full["chain_xy"])
         self.info_var.set(
             f"rp = {rp:.2f} mm   rm = {rm:.4f} mm\n"
             f"r_add = {r_add:.4f}  r_ded = {r_ded:.4f}\n"
-            f"Tooth points: {len(tooth_xy)}\n"
+            f"z_f = {z_f}  chain pts: {n_pts}\n"
             f"ha = {ha:.3f}  hf = {hf:.3f}  ds = {ds:.4f}"
         )
 
