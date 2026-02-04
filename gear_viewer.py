@@ -258,6 +258,8 @@ class Tab22:
         btn_frame.grid(row=row, column=0, columnspan=2, pady=10)
         ttk.Button(btn_frame, text="Update", command=self.redraw).pack(
             side=tk.LEFT, padx=(0, 6))
+        ttk.Button(btn_frame, text="Reset", command=self.reset_params).pack(
+            side=tk.LEFT, padx=(0, 6))
         ttk.Button(btn_frame, text="Export TXT", command=self.export_txt).pack(
             side=tk.LEFT)
         row += 1
@@ -274,6 +276,23 @@ class Tab22:
         self.canvas = tk.Canvas(parent, width=CANVAS_W, height=CANVAS_H,
                                 bg="white")
         self.canvas.pack(side=tk.RIGHT, padx=10, pady=10)
+
+    def reset_params(self):
+        for key, var in self.entries.items():
+            var.set(str(DEFAULTS[key]))
+        self.smooth_var.set("0.001")
+        self._last_result = None
+        self._last_params = None
+        self.canvas.delete("all")
+        draw_axes(self.canvas)
+        self.info_var.set("Reset to defaults.")
+
+    def sync_from(self, tab21: Tab21):
+        for key in PARAM_ORDER:
+            if key in tab21.entries and key in self.entries:
+                self.entries[key].set(tab21.entries[key].get())
+        self._last_result = None
+        self._last_params = None
 
     def _read_params(self) -> dict | None:
         params = {}
@@ -405,6 +424,14 @@ class App:
 
         self.tab21 = Tab21(tab1_frame)
         self.tab22 = Tab22(tab2_frame)
+
+        notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+        self._notebook = notebook
+        self._tab2_frame = tab2_frame
+
+    def _on_tab_changed(self, event):
+        if self._notebook.select() == str(self._tab2_frame):
+            self.tab22.sync_from(self.tab21)
 
 
 def main():
