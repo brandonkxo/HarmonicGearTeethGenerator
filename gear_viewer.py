@@ -5,12 +5,13 @@ Tabbed interface:
   Tab 2.2 — Conjugate circular spline tooth profile (placeholder)
 """
 import math
+import os
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, filedialog
 
 from equations import (DEFAULTS, PARAM_LABELS, PARAM_ORDER, PITCH_RADIUS,
                        compute_profile, compute_conjugate_profile,
-                       smooth_conjugate_profile, trim_and_join_segments)
+                       smooth_conjugate_profile)
 
 # ── Viewport settings ──────────────────────────────────────────────
 HALF_VIEW_MM = 1.5
@@ -253,16 +254,12 @@ class Tab22:
             self.seg_vars[seg_key] = var
             row += 1
 
-        self.composite_var = tk.BooleanVar(value=True)
-        cb_comp = tk.Checkbutton(left, text="Composite flank",
-                                 variable=self.composite_var,
-                                 font=("Consolas", 9, "bold"),
-                                 command=self.redraw)
-        cb_comp.grid(row=row, column=0, columnspan=2, sticky="w")
-        row += 1
-
-        ttk.Button(left, text="Update", command=self.redraw).grid(
-            row=row, column=0, columnspan=2, pady=10)
+        btn_frame = ttk.Frame(left)
+        btn_frame.grid(row=row, column=0, columnspan=2, pady=10)
+        ttk.Button(btn_frame, text="Update", command=self.redraw).pack(
+            side=tk.LEFT, padx=(0, 6))
+        ttk.Button(btn_frame, text="Export TXT", command=self.export_txt).pack(
+            side=tk.LEFT)
         row += 1
 
         self.info_var = tk.StringVar(value="Click Update to compute.")
@@ -287,6 +284,43 @@ class Tab22:
                 self.info_var.set(f"Invalid number for {key}")
                 return None
         return params
+
+    def export_txt(self):
+        if self._last_result is None:
+            self.info_var.set("No data — click Update first.")
+            return
+        raw_roots = self._last_result.get("raw_roots", [])
+        if not raw_roots:
+            self.info_var.set("No root data to export.")
+            return
+
+        path = filedialog.asksaveasfilename(
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+            initialfile="conjugate_roots.txt",
+        )
+        if not path:
+            return
+
+        header = f"{'phi_rad':>14s}  {'phi_deg':>10s}  {'l':>14s}  {'x_g':>14s}  {'y_local':>14s}"
+        sep = "-" * len(header)
+
+        with open(path, "w") as f:
+            for seg_key in ("AB", "BC", "CD"):
+                seg_pts = [(phi, l_zero, xg, y_local)
+                           for phi, l_zero, xg, y_local, s in raw_roots
+                           if s == seg_key]
+                seg_pts.sort(key=lambda r: r[0])
+                f.write(f"=== Segment {seg_key}  ({len(seg_pts)} points) ===\n")
+                f.write(header + "\n")
+                f.write(sep + "\n")
+                for phi, l_zero, xg, y_local in seg_pts:
+                    f.write(f"{phi:14.8f}  {math.degrees(phi):10.4f}  "
+                            f"{l_zero:14.8f}  {xg:14.8f}  {y_local:14.8f}\n")
+                f.write("\n")
+
+        total = len(raw_roots)
+        self.info_var.set(f"Exported {total} pts\n→ {os.path.basename(path)}")
 
     def redraw(self):
         c = self.canvas
@@ -314,7 +348,6 @@ class Tab22:
                 return
 
             smooth_conjugate_profile(result, s=s_val)
-            trim_and_join_segments(result)
             self._last_result = result
             self._last_params = (params, s_val)
         else:
@@ -350,39 +383,10 @@ class Tab22:
             mirrored = [(-x, y) for x, y in smooth]
             draw_polyline(c, mirrored, "grey50")
 
-        # ── Composite flank ──
-        composite = result.get("composite_flank", [])
-        splice_pts = result.get("splice_points", [])
-        comp_count = len(composite)
-
-        if self.composite_var.get() and len(composite) >= 2:
-            # Draw composite as thick black line
-            coords = []
-            for x, y in composite:
-                px, py = mm_to_canvas(x, y)
-                coords.extend([px, py])
-            c.create_line(*coords, fill="black", width=3, smooth=False)
-
-            # Mirrored composite in grey
-            mir_coords = []
-            for x, y in composite:
-                px, py = mm_to_canvas(-x, y)
-                mir_coords.extend([px, py])
-            c.create_line(*mir_coords, fill="grey60", width=2, smooth=False)
-
-            # Splice points as orange circles
-            for sx, sy in splice_pts:
-                px, py = mm_to_canvas(sx, sy)
-                r = 4
-                c.create_oval(px - r, py - r, px + r, py + r,
-                              fill="orange", outline="darkorange", width=1)
-
         self.info_var.set(
             f"rp_c = {result['rp_c']:.2f} mm\n"
             f"AB: {seg_counts['AB']}  BC: {seg_counts['BC']}  "
             f"CD: {seg_counts['CD']} pts\n"
-            f"Composite: {comp_count} pts, "
-            f"{len(splice_pts)} splice(s)\n"
             f"Smoothing s = {s_val}"
         )
 

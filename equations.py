@@ -559,10 +559,10 @@ def compute_conjugate_profile(params: dict,
     # Collect (phi, l_zero, x_local, y_local, segment) for every root
     raw_roots: list[tuple[float, float, float, float, str]] = []
 
-    # Reject envelope solutions beyond the physical tooth region
+    # Bounds for filtering spurious roots
     ha = params["ha"]
     hf = params["hf"]
-    margin = 0.15 * (ha + hf)
+    margin = 0.5 * (ha + hf)
     y_lo = -(hf + margin)
     y_hi =  (ha + margin)
     x_bound = m * math.pi
@@ -623,6 +623,7 @@ def compute_conjugate_profile(params: dict,
         "conjugate_pts": conjugate_pts,
         "branches": branches,
         "seg_branches": seg_branches,
+        "raw_roots": raw_roots,
         "rp_c": rp_c,
         "n_pts": len(conjugate_pts),
         "n_branches": len(branches),
@@ -632,139 +633,6 @@ def compute_conjugate_profile(params: dict,
 # ══════════════════════════════════════════════════════════════════
 # Spline smoothing for conjugate profile branches
 # ══════════════════════════════════════════════════════════════════
-
-def find_polyline_intersections(
-    poly_a: list[tuple[float, float]],
-    poly_b: list[tuple[float, float]],
-) -> list[tuple[float, float]]:
-    """Find all intersection points between two 2D polylines.
-
-    Uses segment-segment intersection via the cross-product method.
-    Returns list of (x, y) intersection points sorted by y descending
-    (tip to root).
-    """
-    def _cross(o, a, b):
-        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
-
-    intersections = []
-    for i in range(len(poly_a) - 1):
-        p1, p2 = poly_a[i], poly_a[i + 1]
-        for j in range(len(poly_b) - 1):
-            p3, p4 = poly_b[j], poly_b[j + 1]
-
-            d1 = _cross(p3, p4, p1)
-            d2 = _cross(p3, p4, p2)
-            d3 = _cross(p1, p2, p3)
-            d4 = _cross(p1, p2, p4)
-
-            if d1 * d2 < 0 and d3 * d4 < 0:
-                t = d1 / (d1 - d2)
-                ix = p1[0] + t * (p2[0] - p1[0])
-                iy = p1[1] + t * (p2[1] - p1[1])
-                intersections.append((ix, iy))
-
-    intersections.sort(key=lambda p: -p[1])  # y descending (tip to root)
-    return intersections
-
-
-def trim_and_join_segments(result: dict) -> dict:
-    """Trim adjacent smoothed segment curves at their intersections and
-    join them into a single composite flank curve.
-
-    Adds to *result*:
-        composite_flank  – list of (x, y) for the joined curve
-        splice_points    – list of (x, y) where segments were spliced
-
-    Works on 'smoothed_seg_branches'; falls back to 'seg_branches'.
-    Returns the same dict (mutated).
-    """
-    if "error" in result:
-        return result
-
-    smooth = result.get("smoothed_seg_branches", result.get("seg_branches", {}))
-    seg_ab = list(smooth.get("AB", []))
-    seg_bc = list(smooth.get("BC", []))
-    seg_cd = list(smooth.get("CD", []))
-
-    # Sort each segment by y descending (tip to root)
-    seg_ab.sort(key=lambda p: -p[1])
-    seg_bc.sort(key=lambda p: -p[1])
-    seg_cd.sort(key=lambda p: -p[1])
-
-    splice_points = []
-    trimmed_parts = []
-
-    # Helper: trim polyline, keeping points on one side of a y threshold
-    def _trim_above_y(pts, y_thresh):
-        """Keep points with y >= y_thresh (above the splice)."""
-        return [p for p in pts if p[1] >= y_thresh - 1e-9]
-
-    def _trim_below_y(pts, y_thresh):
-        """Keep points with y <= y_thresh (below the splice)."""
-        return [p for p in pts if p[1] <= y_thresh + 1e-9]
-
-    has_ab = len(seg_ab) >= 2
-    has_bc = len(seg_bc) >= 2
-    has_cd = len(seg_cd) >= 2
-
-    if has_ab and has_bc:
-        ixns = find_polyline_intersections(seg_ab, seg_bc)
-        if ixns:
-            sp = ixns[0]  # use first (highest-y) intersection
-            splice_points.append(sp)
-            seg_ab = _trim_above_y(seg_ab, sp[1])
-            seg_bc = _trim_below_y(seg_bc, sp[1])
-        else:
-            # Fallback: splice at y-midpoint of overlap region
-            ab_ymin = min(p[1] for p in seg_ab)
-            ab_ymax = max(p[1] for p in seg_ab)
-            bc_ymin = min(p[1] for p in seg_bc)
-            bc_ymax = max(p[1] for p in seg_bc)
-            overlap_hi = min(ab_ymax, bc_ymax)
-            overlap_lo = max(ab_ymin, bc_ymin)
-            if overlap_lo < overlap_hi:
-                y_mid = (overlap_hi + overlap_lo) / 2.0
-                seg_ab = _trim_above_y(seg_ab, y_mid)
-                seg_bc = _trim_below_y(seg_bc, y_mid)
-
-    if has_bc and has_cd:
-        ixns = find_polyline_intersections(seg_bc, seg_cd)
-        if ixns:
-            sp = ixns[0]
-            splice_points.append(sp)
-            seg_bc = _trim_above_y(seg_bc, sp[1])
-            seg_cd = _trim_below_y(seg_cd, sp[1])
-        else:
-            bc_ymin = min(p[1] for p in seg_bc) if seg_bc else 0
-            bc_ymax = max(p[1] for p in seg_bc) if seg_bc else 0
-            cd_ymin = min(p[1] for p in seg_cd)
-            cd_ymax = max(p[1] for p in seg_cd)
-            overlap_hi = min(bc_ymax, cd_ymax)
-            overlap_lo = max(bc_ymin, cd_ymin)
-            if overlap_lo < overlap_hi:
-                y_mid = (overlap_hi + overlap_lo) / 2.0
-                seg_bc = _trim_above_y(seg_bc, y_mid)
-                seg_cd = _trim_below_y(seg_cd, y_mid)
-
-    if not has_bc and has_ab and has_cd:
-        # BC missing — try direct AB-CD intersection
-        ixns = find_polyline_intersections(seg_ab, seg_cd)
-        if ixns:
-            sp = ixns[0]
-            splice_points.append(sp)
-            seg_ab = _trim_above_y(seg_ab, sp[1])
-            seg_cd = _trim_below_y(seg_cd, sp[1])
-
-    # Concatenate (all sorted y-descending already)
-    composite = []
-    for part in (seg_ab, seg_bc, seg_cd):
-        if part:
-            composite.extend(part)
-
-    result["composite_flank"] = composite
-    result["splice_points"] = splice_points
-    return result
-
 
 def smooth_branch(pts: list[tuple[float, float]],
                   s: float = 0.001,
