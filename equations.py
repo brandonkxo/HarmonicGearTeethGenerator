@@ -520,6 +520,31 @@ def eq30_residual_at(l: float, phi: float,
     return eq30_envelope_condition(dxg_dl, dyg_dphi, dyg_dl, dxg_dphi)
 
 
+def _filter_phi_jump(seg_roots: list[tuple], pts: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Keep only the engagement run of a segment's conjugate points.
+
+    Walks through the phi-sorted points and computes consecutive phi
+    steps.  When a step more than doubles the previous step, everything
+    from that point onward is the exit/disengagement sweep and is cut.
+
+    Parameters:
+        seg_roots – raw root tuples sorted by phi (phi is index 0)
+        pts       – corresponding (x_g, y_local) list, same order
+
+    Returns the trimmed pts list.
+    """
+    if len(seg_roots) < 3:
+        return pts
+
+    prev_step = abs(seg_roots[1][0] - seg_roots[0][0])
+    for i in range(2, len(seg_roots)):
+        step = abs(seg_roots[i][0] - seg_roots[i - 1][0])
+        if prev_step > 0 and step > 2.0 * prev_step:
+            return pts[:i]
+        prev_step = step
+    return pts
+
+
 def compute_conjugate_profile(params: dict,
                               N_phi: int = 720,
                               N_l: int = 1000) -> dict:
@@ -613,8 +638,8 @@ def compute_conjugate_profile(params: dict,
         seg_pts = [r for r in raw_roots if r[4] == seg_key]
         seg_pts.sort(key=lambda r: r[0])  # sort by phi
         pts = [(r[2], r[3]) for r in seg_pts]
-        seg_branches[seg_key] = pts
-        conjugate_pts.extend(pts)
+        seg_branches[seg_key] = _filter_phi_jump(seg_pts, pts)
+        conjugate_pts.extend(seg_branches[seg_key])
 
     # Legacy 'branches' list (all non-empty segments)
     branches = [pts for pts in seg_branches.values() if len(pts) >= 2]
