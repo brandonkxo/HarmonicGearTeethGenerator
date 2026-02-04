@@ -245,7 +245,7 @@ class Tab22:
             "CD": "CD (concave)",
         }
         for seg_key in ("AB", "BC", "CD"):
-            var = tk.BooleanVar(value=True)
+            var = tk.BooleanVar(value=False)
             cb = tk.Checkbutton(left, text=self.seg_labels[seg_key],
                                 variable=var, font=("Consolas", 9),
                                 fg=self.seg_colors[seg_key],
@@ -354,7 +354,6 @@ class Tab22:
             result = self._last_result
 
         seg_branches = result.get("seg_branches", {})
-        smooth_seg = result.get("smoothed_seg_branches", {})
 
         # Faint dot colors per segment
         faint_colors = {"AB": "#f0c0c0", "BC": "#c0c0f0", "CD": "#c0f0c0"}
@@ -373,20 +372,18 @@ class Tab22:
                 c.create_oval(px - 1, py - 1, px + 1, py + 1,
                               fill=faint_colors[seg_key], outline="")
 
-            # Smoothed curve as solid line
-            smooth = smooth_seg.get(seg_key, raw)
-            color = self.seg_colors[seg_key]
-            label = self.seg_labels[seg_key]
-            draw_segment(c, smooth, color, label)
-
-            # Mirrored half
-            mirrored = [(-x, y) for x, y in smooth]
+        # Unified B-spline flank
+        flank = result.get("smoothed_flank", [])
+        if len(flank) >= 2:
+            draw_segment(c, flank, "#222222", "Flank")
+            mirrored = [(-x, y) for x, y in flank]
             draw_polyline(c, mirrored, "grey50")
 
+        total_raw = sum(seg_counts.values())
         self.info_var.set(
             f"rp_c = {result['rp_c']:.2f} mm\n"
             f"AB: {seg_counts['AB']}  BC: {seg_counts['BC']}  "
-            f"CD: {seg_counts['CD']} pts\n"
+            f"CD: {seg_counts['CD']}  ({total_raw} total)\n"
             f"Smoothing s = {s_val}"
         )
 

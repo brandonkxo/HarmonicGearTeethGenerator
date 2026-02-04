@@ -688,19 +688,34 @@ def smooth_branch(pts: list[tuple[float, float]],
 def smooth_conjugate_profile(result: dict,
                              s: float = 0.001,
                              num_out: int = 200) -> dict:
-    """Apply spline smoothing to each segment branch of a conjugate profile.
+    """Concatenate all segment points into one flank and fit a single B-spline.
 
-    Adds 'smoothed_seg_branches' dict keyed by segment name ('AB','BC','CD')
-    and legacy 'smoothed_branches' list.
-    Returns the same dict (mutated) with the new keys.
+    The combined points are sorted by y descending (addendum → dedendum)
+    to form a continuous traversal of the tooth flank, then fitted with
+    one cubic B-spline for C2 continuity across the entire profile.
+
+    Adds to *result*:
+        smoothed_flank       – single unified spline curve [(x,y), ...]
+        smoothed_seg_branches – per-segment splines (kept for raw dot overlay)
     """
     if "error" in result:
         return result
 
+    # ── Per-segment splines (for backwards compat / overlay) ──
     smoothed_seg: dict[str, list[tuple[float, float]]] = {}
     for seg_key, pts in result.get("seg_branches", {}).items():
         smoothed_seg[seg_key] = smooth_branch(pts, s=s, num_out=num_out)
     result["smoothed_seg_branches"] = smoothed_seg
+
+    # ── Unified flank: concatenate all segments, sort, fit one spline ──
+    all_pts = []
+    for seg_key in ("AB", "BC", "CD"):
+        all_pts.extend(result.get("seg_branches", {}).get(seg_key, []))
+
+    # Sort by y descending (tip to root) to get a continuous traversal
+    all_pts.sort(key=lambda p: -p[1])
+
+    result["smoothed_flank"] = smooth_branch(all_pts, s=s, num_out=num_out)
 
     # Legacy list form
     result["smoothed_branches"] = [
