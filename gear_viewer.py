@@ -4,77 +4,104 @@ Tabbed interface:
   Tab 2.1 — Flexspline tooth profile (Eqs 1-6)
   Tab 2.2 — Conjugate circular spline tooth profile (placeholder)
 """
+import ctypes
 import math
 import os
+import sys
 import tkinter as tk
 from tkinter import ttk, filedialog
 
+# ── Windows high-DPI fix ──────────────────────────────────────────
+# Tell Windows this process is DPI-aware so it renders at native
+# resolution instead of blurry bitmap scaling.
+if sys.platform == "win32":
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
 from equations import (DEFAULTS, PARAM_LABELS, PARAM_ORDER, PITCH_RADIUS,
                        compute_profile, compute_conjugate_profile,
-                       smooth_conjugate_profile, build_single_tooth_outline,
-                       build_full_flexspline)
+                       smooth_conjugate_profile, build_full_flexspline)
 
 # ── Viewport settings ──────────────────────────────────────────────
 HALF_VIEW_MM = 1.5
-PLOT_PX = 500
-PX_PER_MM = PLOT_PX / (2 * HALF_VIEW_MM)
+DEFAULT_PLOT_PX = 500
 MARGIN = 50
-CANVAS_W = PLOT_PX + MARGIN + 30
-CANVAS_H = PLOT_PX + MARGIN + 30
 TICK_INTERVAL = 0.2
 
 
-def mm_to_canvas(x_mm: float, y_mm: float) -> tuple[float, float]:
-    """Cartesian mm (origin center, y-up) -> canvas pixels."""
-    ox = MARGIN + PLOT_PX / 2
-    oy = PLOT_PX / 2
-    return ox + x_mm * PX_PER_MM, oy - y_mm * PX_PER_MM
+def _make_converter(plot_px: int, half_view: float, margin: int = MARGIN):
+    """Return a mm→canvas-pixel conversion function for a given canvas size."""
+    px_per_mm = plot_px / (2.0 * half_view)
+    ox = margin + plot_px / 2.0
+    oy = plot_px / 2.0
+
+    def to_px(x_mm, y_mm):
+        return ox + x_mm * px_per_mm, oy - y_mm * px_per_mm
+
+    return to_px, plot_px, px_per_mm, ox, oy
 
 
-def draw_axes(c: tk.Canvas):
-    ox, oy = mm_to_canvas(0, 0)
-    c.create_line(MARGIN, oy, MARGIN + PLOT_PX, oy, fill="grey70")
-    c.create_line(ox, 0, ox, PLOT_PX, fill="grey70")
-    v = -HALF_VIEW_MM
-    while v <= HALF_VIEW_MM + 1e-9:
-        px, _ = mm_to_canvas(v, 0)
+def draw_axes(c: tk.Canvas, plot_px: int, half_view: float = HALF_VIEW_MM,
+              x_label: str = "X_R (mm)", y_label: str = "Y_R\n(mm)"):
+    to_px, _, _, ox, oy = _make_converter(plot_px, half_view)
+    c.create_line(MARGIN, oy, MARGIN + plot_px, oy, fill="grey70")
+    c.create_line(ox, 0, ox, plot_px, fill="grey70")
+    v = -half_view
+    while v <= half_view + 1e-9:
+        px, _ = to_px(v, 0)
         c.create_line(px, oy - 3, px, oy + 3, fill="grey70")
         c.create_text(px, oy + 14, text=f"{v:.1f}", font=("Consolas", 7))
-        _, py = mm_to_canvas(0, v)
+        _, py = to_px(0, v)
         c.create_line(ox - 3, py, ox + 3, py, fill="grey70")
         c.create_text(ox - 22, py, text=f"{v:.1f}", font=("Consolas", 7),
                       anchor="e")
         v += TICK_INTERVAL
-    c.create_text(MARGIN + PLOT_PX / 2, PLOT_PX + 30,
-                  text="X_R (mm)", font=("Consolas", 9, "bold"))
-    c.create_text(14, PLOT_PX / 2, text="Y_R\n(mm)",
+    c.create_text(MARGIN + plot_px / 2, plot_px + 30,
+                  text=x_label, font=("Consolas", 9, "bold"))
+    c.create_text(14, plot_px / 2, text=y_label,
                   font=("Consolas", 9, "bold"))
 
 
 # ── Drawing helpers ────────────────────────────────────────────────
 
-def draw_segment(c: tk.Canvas, pts: list, color: str, label: str):
+def draw_segment(c: tk.Canvas, pts: list, color: str, label: str,
+                 to_px=None):
     if len(pts) < 2:
         return
     coords = []
     for x, y in pts:
-        px, py = mm_to_canvas(x, y)
+        px, py = to_px(x, y)
         coords.extend([px, py])
     c.create_line(*coords, fill=color, width=2, smooth=False)
     mx, my = pts[len(pts) // 2]
-    px, py = mm_to_canvas(mx, my)
+    px, py = to_px(mx, my)
     c.create_text(px + 12, py, text=label, font=("Consolas", 7),
                   fill=color, anchor="w")
 
 
-def draw_polyline(c: tk.Canvas, pts: list, color: str):
+def draw_polyline(c: tk.Canvas, pts: list, color: str, to_px=None):
     if len(pts) < 2:
         return
     coords = []
     for x, y in pts:
-        px, py = mm_to_canvas(x, y)
+        px, py = to_px(x, y)
         coords.extend([px, py])
     c.create_line(*coords, fill=color, width=1, dash=(3, 3))
+
+
+def _canvas_plot_px(canvas: tk.Canvas) -> int:
+    """Get the usable plot area from the current canvas size."""
+    w = canvas.winfo_width()
+    h = canvas.winfo_height()
+    # If the canvas hasn't been mapped yet, fall back to defaults
+    if w <= 1 or h <= 1:
+        return DEFAULT_PLOT_PX
+    return min(w, h) - MARGIN - 30
 
 
 # ── Tab 2.1: Flexspline Tooth Profile ─────────────────────────────
@@ -115,10 +142,11 @@ class Tab21:
                   foreground="grey30", wraplength=200, justify="left").grid(
             row=row, column=0, columnspan=2, sticky="w")
 
-        # Right: canvas
-        self.canvas = tk.Canvas(parent, width=CANVAS_W, height=CANVAS_H,
-                                bg="white")
-        self.canvas.pack(side=tk.RIGHT, padx=10, pady=10)
+        # Right: canvas (expands with window)
+        self.canvas = tk.Canvas(parent, bg="white")
+        self.canvas.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True,
+                         padx=10, pady=10)
+        self.canvas.bind("<Configure>", lambda e: self.redraw())
 
         self.redraw()
 
@@ -135,7 +163,10 @@ class Tab21:
     def redraw(self):
         c = self.canvas
         c.delete("all")
-        draw_axes(c)
+        plot_px = _canvas_plot_px(c)
+        draw_axes(c, plot_px)
+
+        to_px, _, _, _, _ = _make_converter(plot_px, HALF_VIEW_MM)
 
         params = self._read_params()
         if params is None:
@@ -155,21 +186,21 @@ class Tab21:
             (ds + hf,      "#ccffcc", "Pitch"),
             (ds,           "#ffcccc", "Dedendum"),
         ]:
-            px1, py = mm_to_canvas(-HALF_VIEW_MM, y_val)
-            px2, _  = mm_to_canvas(HALF_VIEW_MM, y_val)
+            px1, py = to_px(-HALF_VIEW_MM, y_val)
+            px2, _  = to_px(HALF_VIEW_MM, y_val)
             c.create_line(px1, py, px2, py, fill=color, dash=(4, 3))
             c.create_text(px2 - 4, py - 8, text=label,
                           font=("Consolas", 7), fill=color, anchor="e")
 
-        draw_segment(c, result["pts_AB"], "red",   "AB (convex)")
-        draw_segment(c, result["pts_BC"], "blue",  "BC (tangent)")
-        draw_segment(c, result["pts_CD"], "green", "CD (concave)")
+        draw_segment(c, result["pts_AB"], "red",   "AB (convex)", to_px)
+        draw_segment(c, result["pts_BC"], "blue",  "BC (tangent)", to_px)
+        draw_segment(c, result["pts_CD"], "green", "CD (concave)", to_px)
 
         for lbl, x, y, col in [
             ("O\u2081", result["x1_R"], result["y1_R"], "red"),
             ("O\u2082", result["x2_R"], result["y2_R"], "green"),
         ]:
-            px, py = mm_to_canvas(x, y)
+            px, py = to_px(x, y)
             r = 3
             c.create_oval(px - r, py - r, px + r, py + r, fill=col)
             c.create_text(px + 8, py - 8, text=lbl,
@@ -177,7 +208,7 @@ class Tab21:
 
         all_pts = result["pts_AB"] + result["pts_BC"] + result["pts_CD"]
         mirrored = [(-x, y) for x, y in all_pts]
-        draw_polyline(c, mirrored, "grey50")
+        draw_polyline(c, mirrored, "grey50", to_px)
 
         deg = math.degrees
         self.info_var.set(
@@ -273,10 +304,11 @@ class Tab22:
         self._last_result = None
         self._last_params = None
 
-        # Right: canvas
-        self.canvas = tk.Canvas(parent, width=CANVAS_W, height=CANVAS_H,
-                                bg="white")
-        self.canvas.pack(side=tk.RIGHT, padx=10, pady=10)
+        # Right: canvas (expands with window)
+        self.canvas = tk.Canvas(parent, bg="white")
+        self.canvas.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True,
+                         padx=10, pady=10)
+        self.canvas.bind("<Configure>", lambda e: self.redraw())
 
     def reset_params(self):
         for key, var in self.entries.items():
@@ -345,7 +377,10 @@ class Tab22:
     def redraw(self):
         c = self.canvas
         c.delete("all")
-        draw_axes(c)
+        plot_px = _canvas_plot_px(c)
+        draw_axes(c, plot_px)
+
+        to_px, _, _, _, _ = _make_converter(plot_px, HALF_VIEW_MM)
 
         params = self._read_params()
         if params is None:
@@ -386,16 +421,16 @@ class Tab22:
             # Raw envelope points as colored dots
             color = self.seg_colors[seg_key]
             for x, y in raw:
-                px, py = mm_to_canvas(x, y)
+                px, py = to_px(x, y)
                 c.create_oval(px - 2, py - 2, px + 2, py + 2,
                               fill=color, outline="")
 
         # Unified B-spline flank
         flank = result.get("smoothed_flank", [])
         if len(flank) >= 2:
-            draw_segment(c, flank, "#222222", "Flank")
+            draw_segment(c, flank, "#222222", "Flank", to_px)
             mirrored = [(-x, y) for x, y in flank]
-            draw_polyline(c, mirrored, "grey50")
+            draw_polyline(c, mirrored, "grey50", to_px)
 
         total_raw = sum(seg_counts.values())
         self.info_var.set(
@@ -410,9 +445,6 @@ class Tab22:
 
 class TabFlexspline:
     """Flexspline — single tooth on pitch circle with G2 root blends."""
-
-    FS_CANVAS = 600   # canvas pixel size
-    FS_MARGIN = 50
 
     def __init__(self, parent: ttk.Frame):
         self.frame = parent
@@ -453,11 +485,11 @@ class TabFlexspline:
                   foreground="grey30", wraplength=200, justify="left").grid(
             row=row, column=0, columnspan=2, sticky="w")
 
-        # Right: canvas
-        cw = self.FS_CANVAS + self.FS_MARGIN + 30
-        ch = self.FS_CANVAS + self.FS_MARGIN + 30
-        self.canvas = tk.Canvas(parent, width=cw, height=ch, bg="white")
-        self.canvas.pack(side=tk.RIGHT, padx=10, pady=10)
+        # Right: canvas (expands with window)
+        self.canvas = tk.Canvas(parent, bg="white")
+        self.canvas.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True,
+                         padx=10, pady=10)
+        self.canvas.bind("<Configure>", lambda e: self.redraw())
 
     def sync_from(self, tab21: Tab21):
         for key in PARAM_ORDER:
@@ -487,14 +519,9 @@ class TabFlexspline:
         if params is None:
             return
 
-        # Build both: full gear for overview, single tooth for zoom
         full = build_full_flexspline(params)
         if "error" in full:
             self.info_var.set(f"Error: {full['error']}")
-            return
-        single = build_single_tooth_outline(params)
-        if "error" in single:
-            self.info_var.set(f"Error: {single['error']}")
             return
 
         rp = full["rp"]
@@ -513,17 +540,23 @@ class TabFlexspline:
             self.info_var.set("No tooth points generated.")
             return
 
-        plot_px = self.FS_CANVAS
-        margin = self.FS_MARGIN
+        plot_px = _canvas_plot_px(c)
+        margin = MARGIN
 
         if self._zoomed:
-            # ── Zoomed viewport: tight bbox around single tooth + padding ──
-            tooth_xy = single["tooth_xy"]
-            xs = [p[0] for p in tooth_xy]
-            ys = [p[1] for p in tooth_xy]
-            pad = (ha + hf) * 0.8
-            x_min, x_max = min(xs) - pad, max(xs) + pad
-            y_min, y_max = min(ys) - pad, max(ys) + pad
+            # ── Zoomed viewport: ~4 teeth centered at theta=0 ──
+            n_show = 4
+            arc_span = n_show * 2.0 * math.pi / z_f
+            half_span = arc_span / 2.0
+            # Radial range covers dedendum to addendum with padding
+            pad = (ha + hf) * 0.6
+            r_lo = r_ded - pad
+            r_hi = r_add + pad
+            # Bounding box in Cartesian (teeth near top, theta=0)
+            x_min = -rp * math.sin(half_span)
+            x_max =  rp * math.sin(half_span)
+            y_min = r_lo * math.cos(half_span)
+            y_max = r_hi
             view_w = x_max - x_min
             view_h = y_max - y_min
             half_view = max(view_w, view_h) / 2.0
@@ -647,32 +680,14 @@ class TabFlexspline:
                 c.create_text(lx + 4, ly - 8, text=label,
                               font=("Consolas", 7), fill=color, anchor="w")
 
-        # ── Draw gear outline ──
-        if self._zoomed:
-            # Single tooth: two separate flanks + tip line
-            tooth_xy = single["tooth_xy"]
-            split = single["split"]
-            for flank in (tooth_xy[:split], tooth_xy[split:]):
-                if len(flank) >= 2:
-                    coords = []
-                    for X, Y in flank:
-                        px, py = to_px(X, Y)
-                        coords.extend([px, py])
-                    c.create_line(*coords, fill="#222222", width=2,
-                                  smooth=False)
-            if len(tooth_xy) >= 2:
-                px1, py1 = to_px(tooth_xy[0][0], tooth_xy[0][1])
-                px2, py2 = to_px(tooth_xy[-1][0], tooth_xy[-1][1])
-                c.create_line(px1, py1, px2, py2, fill="#222222", width=2)
-        else:
-            # Full gear: one continuous chain
-            chain = full["chain_xy"]
-            if len(chain) >= 2:
-                coords = []
-                for X, Y in chain:
-                    px, py = to_px(X, Y)
-                    coords.extend([px, py])
-                c.create_line(*coords, fill="#222222", width=2, smooth=False)
+        # ── Draw gear outline (full chain in both views) ──
+        chain = full["chain_xy"]
+        if len(chain) >= 2:
+            coords = []
+            for X, Y in chain:
+                px, py = to_px(X, Y)
+                coords.extend([px, py])
+            c.create_line(*coords, fill="#222222", width=2, smooth=False)
 
         # ── Info ──
         n_pts = len(full["chain_xy"])
@@ -701,7 +716,7 @@ class App:
     def __init__(self, root: tk.Tk):
         self.root = root
         root.title("Harmonic Drive — DCT Tooth Calculator")
-        root.resizable(False, False)
+        root.resizable(True, True)
 
         notebook = ttk.Notebook(root)
         notebook.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
