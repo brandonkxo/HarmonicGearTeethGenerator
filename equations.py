@@ -987,3 +987,108 @@ def build_full_flexspline(params: dict, n_ded_arc: int = 8) -> dict:
         "hf": hf,
         "z_f": z_f,
     }
+
+
+def build_full_circular_spline(params: dict,
+                                smoothed_flank: list[tuple[float, float]],
+                                rp_c: float,
+                                n_ded_arc: int = 8) -> dict:
+    """Pattern the circular spline conjugate tooth around the full pitch circle.
+
+    Uses the pre-computed smoothed_flank (one side of the conjugate tooth
+    in tooth-local coords where y_local = y_g - rp_c) and mirrors it to
+    form a complete tooth, then repeats z_c times with dedendum arc
+    connections.
+
+    Parameters:
+        params         – gear parameters dict
+        smoothed_flank – list of (x, y_local) for one flank, sorted
+                         addendum→dedendum (y descending)
+        rp_c           – circular spline pitch radius
+        n_ded_arc      – number of interpolation points per dedendum arc
+
+    Returns dict with:
+        chain_xy  – list of (X, Y) forming the continuous outline
+        rp_c, ha, hf, z_c – geometry references
+    Or {"error": msg} on failure.
+    """
+    if len(smoothed_flank) < 2:
+        return {"error": "Smoothed flank too short to pattern."}
+
+    z_c = int(params["z_c"])
+    ha  = params["ha"]
+    hf  = params["hf"]
+    s   = params["s"]
+    t   = params["t"]
+    ds  = s - t / 2.0
+
+    # Right flank: addendum (top) → dedendum (bottom), y descending
+    right_flank = list(smoothed_flank)
+
+    # Left flank: mirror and reverse (dedendum → addendum)
+    left_flank = [(-x, y) for x, y in reversed(right_flank)]
+
+    # Dedendum radius for circular spline
+    # In local coords, dedendum is at y_local = -hf (below pitch line)
+    # On the circle: r = rp_c + y_local, so r_ded = rp_c - hf
+    # But the actual dedendum of the circular spline depends on ds:
+    # The bottom of the flank gives us the actual dedendum y
+    y_ded = right_flank[-1][1]  # most negative y in the flank
+    r_ded = rp_c + y_ded
+
+    # Angular pitch
+    pitch_angle = 2.0 * math.pi / z_c
+
+    def local_to_polar(x_loc, y_loc, tooth_offset_angle):
+        r = rp_c + y_loc
+        theta = x_loc / rp_c + tooth_offset_angle
+        return r * math.sin(theta), r * math.cos(theta)
+
+    # Angular positions of flank bottom endpoints
+    pt_D = right_flank[-1]     # bottom of right flank
+    pt_Dp = left_flank[0]      # bottom of left flank
+    theta_D  = pt_D[0] / rp_c
+    theta_Dp = pt_Dp[0] / rp_c
+
+    chain_xy = []
+
+    for i in range(z_c):
+        angle_i = i * pitch_angle
+
+        # Left flank: D' → A' (dedendum up to addendum)
+        for x_loc, y_loc in left_flank:
+            chain_xy.append(local_to_polar(x_loc, y_loc, angle_i))
+
+        # Tip is implicit (A' connects to A in the polyline)
+
+        # Right flank: A → D (addendum down to dedendum)
+        for x_loc, y_loc in right_flank:
+            chain_xy.append(local_to_polar(x_loc, y_loc, angle_i))
+
+        # Dedendum arc: D of tooth i → D' of tooth i+1
+        next_i = (i + 1) % z_c
+        angle_next = next_i * pitch_angle
+        theta_start = theta_D + angle_i
+        theta_end   = theta_Dp + angle_next
+
+        if theta_end < theta_start:
+            theta_end += 2.0 * math.pi
+
+        for j in range(1, n_ded_arc + 1):
+            frac = j / n_ded_arc
+            th = theta_start + frac * (theta_end - theta_start)
+            chain_xy.append((r_ded * math.sin(th), r_ded * math.cos(th)))
+
+    # Reference radii
+    y_add = right_flank[0][1]   # most positive y (addendum tip)
+    r_add = rp_c + y_add
+
+    return {
+        "chain_xy": chain_xy,
+        "rp_c": rp_c,
+        "r_add": r_add,
+        "r_ded": r_ded,
+        "ha": ha,
+        "hf": hf,
+        "z_c": z_c,
+    }

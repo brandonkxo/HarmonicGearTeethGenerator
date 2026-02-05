@@ -25,7 +25,8 @@ if sys.platform == "win32":
 
 from equations import (DEFAULTS, PARAM_LABELS, PARAM_ORDER, PITCH_RADIUS,
                        compute_profile, compute_conjugate_profile,
-                       smooth_conjugate_profile, build_full_flexspline)
+                       smooth_conjugate_profile, build_full_flexspline,
+                       build_full_circular_spline)
 
 # ── Viewport settings ──────────────────────────────────────────────
 HALF_VIEW_MM = 1.5
@@ -109,8 +110,10 @@ def _canvas_plot_px(canvas: tk.Canvas) -> int:
 class Tab21:
     """Section 2.1 — Double-circular-arc common-tangent flexspline profile."""
 
-    def __init__(self, parent: ttk.Frame):
+    def __init__(self, parent: ttk.Frame,
+                 shared_vars: dict[str, tk.StringVar]):
         self.frame = parent
+        self.entries = shared_vars
 
         # Left: parameters
         left = ttk.Frame(parent, padding=10)
@@ -120,17 +123,14 @@ class Tab21:
                   font=("Consolas", 10, "bold")).grid(
             row=0, column=0, columnspan=2, pady=(0, 8))
 
-        self.entries: dict[str, tk.StringVar] = {}
         row = 1
         for key in PARAM_ORDER:
             ttk.Label(left, text=PARAM_LABELS[key],
                       font=("Consolas", 9)).grid(row=row, column=0,
                                                   sticky="w", padx=(0, 6))
-            var = tk.StringVar(value=str(DEFAULTS[key]))
-            ent = ttk.Entry(left, textvariable=var, width=10,
+            ent = ttk.Entry(left, textvariable=shared_vars[key], width=10,
                             font=("Consolas", 9))
             ent.grid(row=row, column=1, pady=2)
-            self.entries[key] = var
             row += 1
 
         ttk.Button(left, text="Update", command=self.redraw).grid(
@@ -227,8 +227,12 @@ class Tab21:
 class Tab22:
     """Section 2.2 — Conjugate circular spline tooth profile."""
 
-    def __init__(self, parent: ttk.Frame):
+    def __init__(self, parent: ttk.Frame,
+                 shared_vars: dict[str, tk.StringVar],
+                 smooth_var: tk.StringVar):
         self.frame = parent
+        self.entries = shared_vars
+        self.smooth_var = smooth_var
 
         # Left: parameters
         left = ttk.Frame(parent, padding=10)
@@ -238,25 +242,21 @@ class Tab22:
                   font=("Consolas", 10, "bold")).grid(
             row=0, column=0, columnspan=2, pady=(0, 8))
 
-        self.entries: dict[str, tk.StringVar] = {}
         row = 1
         for key in PARAM_ORDER:
             ttk.Label(left, text=PARAM_LABELS[key],
                       font=("Consolas", 9)).grid(row=row, column=0,
                                                   sticky="w", padx=(0, 6))
-            var = tk.StringVar(value=str(DEFAULTS[key]))
-            ent = ttk.Entry(left, textvariable=var, width=10,
+            ent = ttk.Entry(left, textvariable=shared_vars[key], width=10,
                             font=("Consolas", 9))
             ent.grid(row=row, column=1, pady=2)
-            self.entries[key] = var
             row += 1
 
         # Smoothing factor control
         ttk.Label(left, text="Smoothing (s)",
                   font=("Consolas", 9)).grid(row=row, column=0,
                                               sticky="w", padx=(0, 6))
-        self.smooth_var = tk.StringVar(value="0.001")
-        ttk.Entry(left, textvariable=self.smooth_var, width=10,
+        ttk.Entry(left, textvariable=smooth_var, width=10,
                   font=("Consolas", 9)).grid(row=row, column=1, pady=2)
         row += 1
 
@@ -311,21 +311,14 @@ class Tab22:
         self.canvas.bind("<Configure>", lambda e: self.redraw())
 
     def reset_params(self):
-        for key, var in self.entries.items():
-            var.set(str(DEFAULTS[key]))
+        for key in PARAM_ORDER:
+            self.entries[key].set(str(DEFAULTS[key]))
         self.smooth_var.set("0.001")
         self._last_result = None
         self._last_params = None
         self.canvas.delete("all")
-        draw_axes(self.canvas)
+        draw_axes(self.canvas, _canvas_plot_px(self.canvas))
         self.info_var.set("Reset to defaults.")
-
-    def sync_from(self, tab21: Tab21):
-        for key in PARAM_ORDER:
-            if key in tab21.entries and key in self.entries:
-                self.entries[key].set(tab21.entries[key].get())
-        self._last_result = None
-        self._last_params = None
 
     def _read_params(self) -> dict | None:
         params = {}
@@ -446,10 +439,12 @@ class Tab22:
 class TabFlexspline:
     """Flexspline — single tooth on pitch circle with G2 root blends."""
 
-    def __init__(self, parent: ttk.Frame):
+    def __init__(self, parent: ttk.Frame,
+                 shared_vars: dict[str, tk.StringVar]):
         self.frame = parent
+        self.entries = shared_vars
 
-        # Left: parameters (synced from Tab 2.1)
+        # Left: parameters
         left = ttk.Frame(parent, padding=10)
         left.pack(side=tk.LEFT, fill=tk.Y)
 
@@ -457,17 +452,14 @@ class TabFlexspline:
                   font=("Consolas", 10, "bold")).grid(
             row=0, column=0, columnspan=2, pady=(0, 8))
 
-        self.entries: dict[str, tk.StringVar] = {}
         row = 1
         for key in PARAM_ORDER:
             ttk.Label(left, text=PARAM_LABELS[key],
                       font=("Consolas", 9)).grid(row=row, column=0,
                                                   sticky="w", padx=(0, 6))
-            var = tk.StringVar(value=str(DEFAULTS[key]))
-            ent = ttk.Entry(left, textvariable=var, width=10,
+            ent = ttk.Entry(left, textvariable=shared_vars[key], width=10,
                             font=("Consolas", 9))
             ent.grid(row=row, column=1, pady=2)
-            self.entries[key] = var
             row += 1
 
         btn_frame = ttk.Frame(left)
@@ -490,11 +482,6 @@ class TabFlexspline:
         self.canvas.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True,
                          padx=10, pady=10)
         self.canvas.bind("<Configure>", lambda e: self.redraw())
-
-    def sync_from(self, tab21: Tab21):
-        for key in PARAM_ORDER:
-            if key in tab21.entries and key in self.entries:
-                self.entries[key].set(tab21.entries[key].get())
 
     def _toggle_zoom(self):
         self._zoomed = not self._zoomed
@@ -702,12 +689,511 @@ class TabFlexspline:
 # ── Tab 4: Circular Spline Full Geometry ──────────────────────────
 
 class TabCircularSpline:
-    """Full circular spline gear — conjugate tooth profile patterned around the ring."""
+    """Circular spline — conjugate tooth profile patterned around the ring."""
 
-    def __init__(self, parent: ttk.Frame):
+    def __init__(self, parent: ttk.Frame,
+                 shared_vars: dict[str, tk.StringVar],
+                 smooth_var: tk.StringVar):
         self.frame = parent
-        ttk.Label(parent, text="Circular Spline — full geometry (coming soon)",
-                  font=("Consolas", 10)).pack(padx=20, pady=20)
+        self.entries = shared_vars
+        self.smooth_var = smooth_var
+
+        # Left: parameters
+        left = ttk.Frame(parent, padding=10)
+        left.pack(side=tk.LEFT, fill=tk.Y)
+
+        ttk.Label(left, text="Circular Spline on Circle",
+                  font=("Consolas", 10, "bold")).grid(
+            row=0, column=0, columnspan=2, pady=(0, 8))
+
+        row = 1
+        for key in PARAM_ORDER:
+            ttk.Label(left, text=PARAM_LABELS[key],
+                      font=("Consolas", 9)).grid(row=row, column=0,
+                                                  sticky="w", padx=(0, 6))
+            ent = ttk.Entry(left, textvariable=shared_vars[key], width=10,
+                            font=("Consolas", 9))
+            ent.grid(row=row, column=1, pady=2)
+            row += 1
+
+        # Smoothing factor
+        ttk.Label(left, text="Smoothing (s)",
+                  font=("Consolas", 9)).grid(row=row, column=0,
+                                              sticky="w", padx=(0, 6))
+        ttk.Entry(left, textvariable=smooth_var, width=10,
+                  font=("Consolas", 9)).grid(row=row, column=1, pady=2)
+        row += 1
+
+        btn_frame = ttk.Frame(left)
+        btn_frame.grid(row=row, column=0, columnspan=2, pady=10)
+        ttk.Button(btn_frame, text="Update", command=self.redraw).pack(
+            side=tk.LEFT, padx=(0, 6))
+        self._zoomed = False
+        self._zoom_btn = ttk.Button(btn_frame, text="Zoom In",
+                                    command=self._toggle_zoom)
+        self._zoom_btn.pack(side=tk.LEFT)
+        row += 1
+
+        self.info_var = tk.StringVar(value="Click Update to compute.")
+        ttk.Label(left, textvariable=self.info_var, font=("Consolas", 8),
+                  foreground="grey30", wraplength=200, justify="left").grid(
+            row=row, column=0, columnspan=2, sticky="w")
+
+        self._last_conj = None
+        self._last_params_key = None
+
+        # Right: canvas (expands with window)
+        self.canvas = tk.Canvas(parent, bg="white")
+        self.canvas.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True,
+                         padx=10, pady=10)
+        self.canvas.bind("<Configure>", lambda e: self.redraw())
+
+    def _toggle_zoom(self):
+        self._zoomed = not self._zoomed
+        self._zoom_btn.config(text="Zoom Out" if self._zoomed else "Zoom In")
+        self.redraw()
+
+    def _read_params(self) -> dict | None:
+        params = {}
+        for key, var in self.entries.items():
+            try:
+                params[key] = float(var.get())
+            except ValueError:
+                self.info_var.set(f"Invalid number for {key}")
+                return None
+        return params
+
+    def redraw(self):
+        c = self.canvas
+        c.delete("all")
+
+        params = self._read_params()
+        if params is None:
+            return
+
+        try:
+            s_val = float(self.smooth_var.get())
+        except ValueError:
+            self.info_var.set("Invalid smoothing value")
+            return
+
+        # Cache the expensive conjugate computation
+        params_key = (tuple(sorted(params.items())), s_val)
+        if self._last_conj is None or self._last_params_key != params_key:
+            self.info_var.set("Computing conjugate profile...")
+            self.frame.update_idletasks()
+
+            conj = compute_conjugate_profile(params)
+            if "error" in conj:
+                self.info_var.set(f"Error: {conj['error']}")
+                return
+            smooth_conjugate_profile(conj, s=s_val)
+            self._last_conj = conj
+            self._last_params_key = params_key
+        else:
+            conj = self._last_conj
+
+        flank = conj.get("smoothed_flank", [])
+        rp_c = conj["rp_c"]
+
+        full = build_full_circular_spline(params, flank, rp_c)
+        if "error" in full:
+            self.info_var.set(f"Error: {full['error']}")
+            return
+
+        z_c   = full["z_c"]
+        r_add = full["r_add"]
+        r_ded = full["r_ded"]
+        ha    = full["ha"]
+        hf    = full["hf"]
+        chain = full["chain_xy"]
+
+        if not chain:
+            self.info_var.set("No points generated.")
+            return
+
+        plot_px = _canvas_plot_px(c)
+        margin = MARGIN
+
+        if self._zoomed:
+            # ~4 teeth centered at theta=0
+            n_show = 4
+            arc_span = n_show * 2.0 * math.pi / z_c
+            half_span = arc_span / 2.0
+            pad = abs(r_add - r_ded) * 0.6
+            r_lo = min(r_ded, r_add) - pad
+            r_hi = max(r_ded, r_add) + pad
+            x_min = -rp_c * math.sin(half_span)
+            x_max =  rp_c * math.sin(half_span)
+            y_min = r_lo * math.cos(half_span)
+            y_max = r_hi
+            view_w = x_max - x_min
+            view_h = y_max - y_min
+            half_view = max(view_w, view_h) / 2.0
+            cx_view = (x_min + x_max) / 2.0
+            cy_view = (y_min + y_max) / 2.0
+        else:
+            half_view = rp_c * 1.2
+            cx_view = 0.0
+            cy_view = 0.0
+
+        px_per_mm = plot_px / (2.0 * half_view)
+
+        ox = margin + plot_px / 2.0
+        oy = plot_px / 2.0
+
+        def to_px(x_mm, y_mm):
+            return (ox + (x_mm - cx_view) * px_per_mm,
+                    oy - (y_mm - cy_view) * px_per_mm)
+
+        # ── Draw axes ──
+        ax_y_px = oy - (0 - cy_view) * px_per_mm
+        if 0 <= ax_y_px <= plot_px:
+            c.create_line(margin, ax_y_px, margin + plot_px, ax_y_px,
+                          fill="grey70")
+        ax_x_px = ox + (0 - cx_view) * px_per_mm
+        if margin <= ax_x_px <= margin + plot_px:
+            c.create_line(ax_x_px, 0, ax_x_px, plot_px, fill="grey70")
+
+        # Tick interval
+        raw_step = (2 * half_view) / 10.0
+        mag = 10 ** math.floor(math.log10(max(raw_step, 1e-12)))
+        candidates = [mag, 2 * mag, 5 * mag, 10 * mag]
+        tick_step = min(candidates, key=lambda s: abs(s - raw_step))
+        tick_fmt = f"{{:.{max(0, -math.floor(math.log10(max(tick_step, 1e-12))))}f}}"
+
+        v_lo = cx_view - half_view
+        v_hi = cx_view + half_view
+        v = math.floor(v_lo / tick_step) * tick_step
+        while v <= v_hi + 1e-9:
+            px_t, _ = to_px(v, 0)
+            if margin <= px_t <= margin + plot_px and 0 <= ax_y_px <= plot_px:
+                c.create_line(px_t, ax_y_px - 3, px_t, ax_y_px + 3,
+                              fill="grey70")
+                c.create_text(px_t, ax_y_px + 14,
+                              text=tick_fmt.format(v), font=("Consolas", 7))
+            v += tick_step
+
+        v_lo_y = cy_view - half_view
+        v_hi_y = cy_view + half_view
+        v = math.floor(v_lo_y / tick_step) * tick_step
+        while v <= v_hi_y + 1e-9:
+            _, py_t = to_px(0, v)
+            if 0 <= py_t <= plot_px and margin <= ax_x_px <= margin + plot_px:
+                c.create_line(ax_x_px - 3, py_t, ax_x_px + 3, py_t,
+                              fill="grey70")
+                c.create_text(ax_x_px - 22, py_t,
+                              text=tick_fmt.format(v), font=("Consolas", 7),
+                              anchor="e")
+            v += tick_step
+
+        c.create_text(margin + plot_px / 2, plot_px + 30,
+                      text="X (mm)", font=("Consolas", 9, "bold"))
+        c.create_text(14, plot_px / 2, text="Y\n(mm)",
+                      font=("Consolas", 9, "bold"))
+
+        # ── Reference circles ──
+        if self._zoomed:
+            theta_span = 2.0 * half_view / rp_c * 1.5
+            theta_center = math.atan2(cx_view, cy_view)
+            n_arc = 200
+            for radius, color, label in [
+                (r_add, "#9999ff", "Addendum"),
+                (rp_c,  "#66cc66", "Pitch"),
+                (r_ded, "#ff9999", "Dedendum"),
+            ]:
+                arc_coords = []
+                for i in range(n_arc + 1):
+                    th = theta_center - theta_span/2 + theta_span * i / n_arc
+                    ax = radius * math.sin(th)
+                    ay = radius * math.cos(th)
+                    px, py = to_px(ax, ay)
+                    arc_coords.extend([px, py])
+                if len(arc_coords) >= 4:
+                    c.create_line(*arc_coords, fill=color, dash=(4, 3),
+                                  width=1)
+                lx, ly = arc_coords[-2], arc_coords[-1]
+                c.create_text(lx + 4, ly, text=label,
+                              font=("Consolas", 7), fill=color, anchor="w")
+        else:
+            n_circ = 360
+            for radius, color, label in [
+                (r_add, "#9999ff", "Addendum"),
+                (rp_c,  "#66cc66", "Pitch"),
+                (r_ded, "#ff9999", "Dedendum"),
+            ]:
+                circ_coords = []
+                for i in range(n_circ + 1):
+                    th = 2 * math.pi * i / n_circ
+                    cx_mm = radius * math.sin(th)
+                    cy_mm = radius * math.cos(th)
+                    px, py = to_px(cx_mm, cy_mm)
+                    circ_coords.extend([px, py])
+                if len(circ_coords) >= 4:
+                    c.create_line(*circ_coords, fill=color, dash=(4, 3),
+                                  width=1)
+                lx, ly = to_px(0, radius)
+                c.create_text(lx + 4, ly - 8, text=label,
+                              font=("Consolas", 7), fill=color, anchor="w")
+
+        # ── Draw gear outline ──
+        if len(chain) >= 2:
+            coords = []
+            for X, Y in chain:
+                px, py = to_px(X, Y)
+                coords.extend([px, py])
+            c.create_line(*coords, fill="#222222", width=2, smooth=False)
+
+        # ── Info ──
+        n_pts = len(chain)
+        self.info_var.set(
+            f"rp_c = {rp_c:.2f} mm\n"
+            f"r_add = {r_add:.4f}  r_ded = {r_ded:.4f}\n"
+            f"z_c = {z_c}  chain pts: {n_pts}\n"
+            f"ha = {ha:.3f}  hf = {hf:.3f}"
+        )
+
+
+# ── Tab 5: Overlay — Flexspline + Circular Spline ────────────────
+
+class TabOverlay:
+    """Overlay of both flexspline and circular spline on one view."""
+
+    CLR_FLEX = "#2266cc"   # blue for flexspline
+    CLR_CIRC = "#cc3333"   # red for circular spline
+
+    def __init__(self, parent: ttk.Frame,
+                 shared_vars: dict[str, tk.StringVar],
+                 smooth_var: tk.StringVar):
+        self.frame = parent
+        self.entries = shared_vars
+        self.smooth_var = smooth_var
+
+        # Left: parameters
+        left = ttk.Frame(parent, padding=10)
+        left.pack(side=tk.LEFT, fill=tk.Y)
+
+        ttk.Label(left, text="Overlay View",
+                  font=("Consolas", 10, "bold")).grid(
+            row=0, column=0, columnspan=2, pady=(0, 8))
+
+        row = 1
+        for key in PARAM_ORDER:
+            ttk.Label(left, text=PARAM_LABELS[key],
+                      font=("Consolas", 9)).grid(row=row, column=0,
+                                                  sticky="w", padx=(0, 6))
+            ent = ttk.Entry(left, textvariable=shared_vars[key], width=10,
+                            font=("Consolas", 9))
+            ent.grid(row=row, column=1, pady=2)
+            row += 1
+
+        # Smoothing factor
+        ttk.Label(left, text="Smoothing (s)",
+                  font=("Consolas", 9)).grid(row=row, column=0,
+                                              sticky="w", padx=(0, 6))
+        ttk.Entry(left, textvariable=smooth_var, width=10,
+                  font=("Consolas", 9)).grid(row=row, column=1, pady=2)
+        row += 1
+
+        btn_frame = ttk.Frame(left)
+        btn_frame.grid(row=row, column=0, columnspan=2, pady=10)
+        ttk.Button(btn_frame, text="Update", command=self.redraw).pack(
+            side=tk.LEFT, padx=(0, 6))
+        self._zoomed = False
+        self._zoom_btn = ttk.Button(btn_frame, text="Zoom In",
+                                    command=self._toggle_zoom)
+        self._zoom_btn.pack(side=tk.LEFT)
+        row += 1
+
+        # Legend
+        legend = ttk.Frame(left)
+        legend.grid(row=row, column=0, columnspan=2, sticky="w", pady=(0, 4))
+        tk.Canvas(legend, width=14, height=14, bg=self.CLR_FLEX,
+                  highlightthickness=0).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Label(legend, text="Flexspline",
+                  font=("Consolas", 8)).pack(side=tk.LEFT, padx=(0, 10))
+        tk.Canvas(legend, width=14, height=14, bg=self.CLR_CIRC,
+                  highlightthickness=0).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Label(legend, text="Circular Spline",
+                  font=("Consolas", 8)).pack(side=tk.LEFT)
+        row += 1
+
+        self.info_var = tk.StringVar(value="Click Update to compute.")
+        ttk.Label(left, textvariable=self.info_var, font=("Consolas", 8),
+                  foreground="grey30", wraplength=200, justify="left").grid(
+            row=row, column=0, columnspan=2, sticky="w")
+
+        self._last_conj = None
+        self._last_params_key = None
+
+        # Right: canvas
+        self.canvas = tk.Canvas(parent, bg="white")
+        self.canvas.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True,
+                         padx=10, pady=10)
+        self.canvas.bind("<Configure>", lambda e: self.redraw())
+
+    def _toggle_zoom(self):
+        self._zoomed = not self._zoomed
+        self._zoom_btn.config(text="Zoom Out" if self._zoomed else "Zoom In")
+        self.redraw()
+
+    def _read_params(self) -> dict | None:
+        params = {}
+        for key, var in self.entries.items():
+            try:
+                params[key] = float(var.get())
+            except ValueError:
+                self.info_var.set(f"Invalid number for {key}")
+                return None
+        return params
+
+    def redraw(self):
+        c = self.canvas
+        c.delete("all")
+
+        params = self._read_params()
+        if params is None:
+            return
+
+        try:
+            s_val = float(self.smooth_var.get())
+        except ValueError:
+            self.info_var.set("Invalid smoothing value")
+            return
+
+        # ── Build flexspline chain ──
+        fs = build_full_flexspline(params)
+        if "error" in fs:
+            self.info_var.set(f"Flexspline error: {fs['error']}")
+            return
+
+        # ── Build circular spline chain (with cached conjugate) ──
+        params_key = (tuple(sorted(params.items())), s_val)
+        if self._last_conj is None or self._last_params_key != params_key:
+            self.info_var.set("Computing conjugate profile...")
+            self.frame.update_idletasks()
+
+            conj = compute_conjugate_profile(params)
+            if "error" in conj:
+                self.info_var.set(f"Conjugate error: {conj['error']}")
+                return
+            smooth_conjugate_profile(conj, s=s_val)
+            self._last_conj = conj
+            self._last_params_key = params_key
+        else:
+            conj = self._last_conj
+
+        flank = conj.get("smoothed_flank", [])
+        rp_c = conj["rp_c"]
+        cs = build_full_circular_spline(params, flank, rp_c)
+        if "error" in cs:
+            self.info_var.set(f"Circ. spline error: {cs['error']}")
+            return
+
+        rp_f = fs["rp"]
+        rp_cs = cs["rp_c"]
+
+        # Use the larger pitch radius for the viewport
+        rp_max = max(rp_f, rp_cs)
+
+        plot_px = _canvas_plot_px(c)
+        margin = MARGIN
+
+        if self._zoomed:
+            # ~4 teeth (use flexspline tooth count for angular pitch)
+            z_f = fs["z_f"]
+            n_show = 4
+            arc_span = n_show * 2.0 * math.pi / z_f
+            half_span = arc_span / 2.0
+            # Radial range covers both gears
+            r_lo = min(fs["rm"] + fs["ds"], cs["r_ded"])
+            r_hi = max(fs["rm"] + fs["ds"] + fs["hf"] + fs["ha"],
+                       cs["r_add"])
+            pad = (r_hi - r_lo) * 0.3
+            r_lo -= pad
+            r_hi += pad
+            x_min = -rp_max * math.sin(half_span)
+            x_max =  rp_max * math.sin(half_span)
+            y_min = r_lo * math.cos(half_span)
+            y_max = r_hi
+            view_w = x_max - x_min
+            view_h = y_max - y_min
+            half_view = max(view_w, view_h) / 2.0
+            cx_view = (x_min + x_max) / 2.0
+            cy_view = (y_min + y_max) / 2.0
+        else:
+            half_view = rp_max * 1.2
+            cx_view = 0.0
+            cy_view = 0.0
+
+        px_per_mm = plot_px / (2.0 * half_view)
+        ox = margin + plot_px / 2.0
+        oy = plot_px / 2.0
+
+        def to_px(x_mm, y_mm):
+            return (ox + (x_mm - cx_view) * px_per_mm,
+                    oy - (y_mm - cy_view) * px_per_mm)
+
+        # ── Axes ──
+        ax_y_px = oy - (0 - cy_view) * px_per_mm
+        if 0 <= ax_y_px <= plot_px:
+            c.create_line(margin, ax_y_px, margin + plot_px, ax_y_px,
+                          fill="grey70")
+        ax_x_px = ox + (0 - cx_view) * px_per_mm
+        if margin <= ax_x_px <= margin + plot_px:
+            c.create_line(ax_x_px, 0, ax_x_px, plot_px, fill="grey70")
+
+        raw_step = (2 * half_view) / 10.0
+        mag = 10 ** math.floor(math.log10(max(raw_step, 1e-12)))
+        candidates = [mag, 2 * mag, 5 * mag, 10 * mag]
+        tick_step = min(candidates, key=lambda s: abs(s - raw_step))
+        tick_fmt = f"{{:.{max(0, -math.floor(math.log10(max(tick_step, 1e-12))))}f}}"
+
+        v = math.floor((cx_view - half_view) / tick_step) * tick_step
+        while v <= cx_view + half_view + 1e-9:
+            px_t, _ = to_px(v, 0)
+            if margin <= px_t <= margin + plot_px and 0 <= ax_y_px <= plot_px:
+                c.create_line(px_t, ax_y_px - 3, px_t, ax_y_px + 3,
+                              fill="grey70")
+                c.create_text(px_t, ax_y_px + 14,
+                              text=tick_fmt.format(v), font=("Consolas", 7))
+            v += tick_step
+
+        v = math.floor((cy_view - half_view) / tick_step) * tick_step
+        while v <= cy_view + half_view + 1e-9:
+            _, py_t = to_px(0, v)
+            if 0 <= py_t <= plot_px and margin <= ax_x_px <= margin + plot_px:
+                c.create_line(ax_x_px - 3, py_t, ax_x_px + 3, py_t,
+                              fill="grey70")
+                c.create_text(ax_x_px - 22, py_t,
+                              text=tick_fmt.format(v), font=("Consolas", 7),
+                              anchor="e")
+            v += tick_step
+
+        c.create_text(margin + plot_px / 2, plot_px + 30,
+                      text="X (mm)", font=("Consolas", 9, "bold"))
+        c.create_text(14, plot_px / 2, text="Y\n(mm)",
+                      font=("Consolas", 9, "bold"))
+
+        # ── Draw both gear outlines ──
+        for chain, color in [
+            (fs["chain_xy"], self.CLR_FLEX),
+            (cs["chain_xy"], self.CLR_CIRC),
+        ]:
+            if len(chain) >= 2:
+                coords = []
+                for X, Y in chain:
+                    px, py = to_px(X, Y)
+                    coords.extend([px, py])
+                c.create_line(*coords, fill=color, width=2, smooth=False)
+
+        # ── Info ──
+        self.info_var.set(
+            f"Flexspline (blue):  z_f={fs['z_f']}  "
+            f"rp={rp_f:.2f}\n"
+            f"Circ. spline (red): z_c={cs['z_c']}  "
+            f"rp_c={rp_cs:.2f}"
+        )
 
 
 # ── Main App ───────────────────────────────────────────────────────
@@ -725,29 +1211,24 @@ class App:
         tab2_frame = ttk.Frame(notebook)
         tab3_frame = ttk.Frame(notebook)
         tab4_frame = ttk.Frame(notebook)
+        tab5_frame = ttk.Frame(notebook)
 
         notebook.add(tab1_frame, text=" 2.1 Flexspline Tooth ")
         notebook.add(tab2_frame, text=" 2.2 Conjugate Circular Spline Tooth ")
-        notebook.add(tab3_frame, text=" Flexspline ")
-        notebook.add(tab4_frame, text=" Circular Spline ")
+        notebook.add(tab3_frame, text=" 2.3 Flexspline ")
+        notebook.add(tab4_frame, text=" 2.4 Circular Spline ")
+        notebook.add(tab5_frame, text=" 2.5 Overlay ")
 
-        self.tab21 = Tab21(tab1_frame)
-        self.tab22 = Tab22(tab2_frame)
-        self.tab_fs = TabFlexspline(tab3_frame)
-        self.tab_cs = TabCircularSpline(tab4_frame)
+        # Shared parameter variables across all tabs
+        shared_vars = {key: tk.StringVar(value=str(DEFAULTS[key]))
+                       for key in PARAM_ORDER}
+        smooth_var = tk.StringVar(value="0.001")
 
-        notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
-        self._notebook = notebook
-        self._tab2_frame = tab2_frame
-        self._tab3_frame = tab3_frame
-        self._tab4_frame = tab4_frame
-
-    def _on_tab_changed(self, event):
-        selected = self._notebook.select()
-        if selected == str(self._tab2_frame):
-            self.tab22.sync_from(self.tab21)
-        elif selected == str(self._tab3_frame):
-            self.tab_fs.sync_from(self.tab21)
+        self.tab21 = Tab21(tab1_frame, shared_vars)
+        self.tab22 = Tab22(tab2_frame, shared_vars, smooth_var)
+        self.tab_fs = TabFlexspline(tab3_frame, shared_vars)
+        self.tab_cs = TabCircularSpline(tab4_frame, shared_vars, smooth_var)
+        self.tab_ov = TabOverlay(tab5_frame, shared_vars, smooth_var)
 
 
 def main():
