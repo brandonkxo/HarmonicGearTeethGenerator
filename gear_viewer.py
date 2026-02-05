@@ -469,8 +469,12 @@ class TabFlexspline:
         self._zoomed = False
         self._zoom_btn = ttk.Button(btn_frame, text="Zoom In",
                                     command=self._toggle_zoom)
-        self._zoom_btn.pack(side=tk.LEFT)
+        self._zoom_btn.pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(btn_frame, text="Export", command=self._export_sldcrv).pack(
+            side=tk.LEFT)
         row += 1
+
+        self._last_chain = None  # Cache for export
 
         self.info_var = tk.StringVar(value="Click Update to draw tooth.")
         ttk.Label(left, textvariable=self.info_var, font=("Consolas", 8),
@@ -487,6 +491,40 @@ class TabFlexspline:
         self._zoomed = not self._zoomed
         self._zoom_btn.config(text="Zoom Out" if self._zoomed else "Zoom In")
         self.redraw()
+
+    def _export_sldcrv(self):
+        """Export flexspline curve as SolidWorks .sldcrv file."""
+        if self._last_chain is None or len(self._last_chain) == 0:
+            self.info_var.set("No data to export. Click Update first.")
+            return
+
+        path = filedialog.asksaveasfilename(
+            defaultextension=".sldcrv",
+            filetypes=[("SolidWorks Curve", "*.sldcrv"), ("All files", "*.*")],
+            initialfile="flexspline.sldcrv",
+        )
+        if not path:
+            return
+
+        # Filter out duplicate/near-duplicate points
+        min_dist = 1e-4  # minimum distance between points (mm)
+        filtered = []
+        for x, y in self._last_chain:
+            is_duplicate = False
+            for fx, fy in filtered:
+                dx = x - fx
+                dy = y - fy
+                if math.sqrt(dx*dx + dy*dy) <= min_dist:
+                    is_duplicate = True
+                    break
+            if not is_duplicate:
+                filtered.append((x, y))
+
+        with open(path, "w") as f:
+            for x, y in filtered:
+                f.write(f"{x},{y},0\n")
+
+        self.info_var.set(f"Exported {len(filtered)} points\n({len(self._last_chain) - len(filtered)} duplicates removed)\n-> {os.path.basename(path)}")
 
     def _read_params(self) -> dict | None:
         params = {}
@@ -669,12 +707,13 @@ class TabFlexspline:
 
         # ── Draw gear outline (full chain in both views) ──
         chain = full["chain_xy"]
+        self._last_chain = chain  # Cache for export
         if len(chain) >= 2:
             coords = []
             for X, Y in chain:
                 px, py = to_px(X, Y)
                 coords.extend([px, py])
-            c.create_line(*coords, fill="#222222", width=2, smooth=False)
+            c.create_line(*coords, fill="#2266cc", width=2, smooth=False)
 
         # ── Info ──
         n_pts = len(full["chain_xy"])
@@ -731,7 +770,9 @@ class TabCircularSpline:
         self._zoomed = False
         self._zoom_btn = ttk.Button(btn_frame, text="Zoom In",
                                     command=self._toggle_zoom)
-        self._zoom_btn.pack(side=tk.LEFT)
+        self._zoom_btn.pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(btn_frame, text="Export", command=self._export_sldcrv).pack(
+            side=tk.LEFT)
         row += 1
 
         self.info_var = tk.StringVar(value="Click Update to compute.")
@@ -741,6 +782,7 @@ class TabCircularSpline:
 
         self._last_conj = None
         self._last_params_key = None
+        self._last_chain = None  # Cache for export
 
         # Right: canvas (expands with window)
         self.canvas = tk.Canvas(parent, bg="white")
@@ -752,6 +794,40 @@ class TabCircularSpline:
         self._zoomed = not self._zoomed
         self._zoom_btn.config(text="Zoom Out" if self._zoomed else "Zoom In")
         self.redraw()
+
+    def _export_sldcrv(self):
+        """Export circular spline curve as SolidWorks .sldcrv file."""
+        if self._last_chain is None or len(self._last_chain) == 0:
+            self.info_var.set("No data to export. Click Update first.")
+            return
+
+        path = filedialog.asksaveasfilename(
+            defaultextension=".sldcrv",
+            filetypes=[("SolidWorks Curve", "*.sldcrv"), ("All files", "*.*")],
+            initialfile="circular_spline.sldcrv",
+        )
+        if not path:
+            return
+
+        # Filter out duplicate/near-duplicate points
+        min_dist = 1e-4  # minimum distance between points (mm)
+        filtered = []
+        for x, y in self._last_chain:
+            is_duplicate = False
+            for fx, fy in filtered:
+                dx = x - fx
+                dy = y - fy
+                if math.sqrt(dx*dx + dy*dy) <= min_dist:
+                    is_duplicate = True
+                    break
+            if not is_duplicate:
+                filtered.append((x, y))
+
+        with open(path, "w") as f:
+            for x, y in filtered:
+                f.write(f"{x},{y},0\n")
+
+        self.info_var.set(f"Exported {len(filtered)} points\n({len(self._last_chain) - len(filtered)} duplicates removed)\n-> {os.path.basename(path)}")
 
     def _read_params(self) -> dict | None:
         params = {}
@@ -807,6 +883,7 @@ class TabCircularSpline:
         ha    = full["ha"]
         hf    = full["hf"]
         chain = full["chain_xy"]
+        self._last_chain = chain  # Cache for export
 
         if not chain:
             self.info_var.set("No points generated.")
@@ -942,7 +1019,7 @@ class TabCircularSpline:
             for X, Y in chain:
                 px, py = to_px(X, Y)
                 coords.extend([px, py])
-            c.create_line(*coords, fill="#222222", width=2, smooth=False)
+            c.create_line(*coords, fill="#cc3333", width=2, smooth=False)
 
         # ── Info ──
         n_pts = len(chain)
