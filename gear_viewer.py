@@ -506,25 +506,28 @@ class TabFlexspline:
         if not path:
             return
 
-        # Filter out duplicate/near-duplicate points
-        min_dist = 1e-4  # minimum distance between points (mm)
+        # Filter only exact duplicate consecutive points (floating point identical)
+        # Use 1e-9 threshold to catch floating point rounding but keep distinct points
+        min_dist = 1e-9
         filtered = []
+        removed = 0
         for x, y in self._last_chain:
-            is_duplicate = False
-            for fx, fy in filtered:
-                dx = x - fx
-                dy = y - fy
-                if math.sqrt(dx*dx + dy*dy) <= min_dist:
-                    is_duplicate = True
-                    break
-            if not is_duplicate:
+            if not filtered:
                 filtered.append((x, y))
+            else:
+                dx = x - filtered[-1][0]
+                dy = y - filtered[-1][1]
+                dist_sq = dx*dx + dy*dy
+                if dist_sq > min_dist * min_dist:
+                    filtered.append((x, y))
+                else:
+                    removed += 1
 
         with open(path, "w") as f:
             for x, y in filtered:
-                f.write(f"{x},{y},0\n")
+                f.write(f"{x:.6f},{y:.6f},0\n")
 
-        self.info_var.set(f"Exported {len(filtered)} points\n({len(self._last_chain) - len(filtered)} duplicates removed)\n-> {os.path.basename(path)}")
+        self.info_var.set(f"Exported {len(filtered)} points\n({removed} duplicates removed)\n-> {os.path.basename(path)}")
 
     def _read_params(self) -> dict | None:
         params = {}
@@ -809,25 +812,28 @@ class TabCircularSpline:
         if not path:
             return
 
-        # Filter out duplicate/near-duplicate points
-        min_dist = 1e-4  # minimum distance between points (mm)
+        # Filter only exact duplicate consecutive points (floating point identical)
+        # Use 1e-9 threshold to catch floating point rounding but keep distinct points
+        min_dist = 1e-9
         filtered = []
+        removed = 0
         for x, y in self._last_chain:
-            is_duplicate = False
-            for fx, fy in filtered:
-                dx = x - fx
-                dy = y - fy
-                if math.sqrt(dx*dx + dy*dy) <= min_dist:
-                    is_duplicate = True
-                    break
-            if not is_duplicate:
+            if not filtered:
                 filtered.append((x, y))
+            else:
+                dx = x - filtered[-1][0]
+                dy = y - filtered[-1][1]
+                dist_sq = dx*dx + dy*dy
+                if dist_sq > min_dist * min_dist:
+                    filtered.append((x, y))
+                else:
+                    removed += 1
 
         with open(path, "w") as f:
             for x, y in filtered:
-                f.write(f"{x},{y},0\n")
+                f.write(f"{x:.6f},{y:.6f},0\n")
 
-        self.info_var.set(f"Exported {len(filtered)} points\n({len(self._last_chain) - len(filtered)} duplicates removed)\n-> {os.path.basename(path)}")
+        self.info_var.set(f"Exported {len(filtered)} points\n({removed} duplicates removed)\n-> {os.path.basename(path)}")
 
     def _read_params(self) -> dict | None:
         params = {}
