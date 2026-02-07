@@ -27,8 +27,8 @@ DEFAULTS = {
     "e2": 0.134,
     "ha": 0.275,    # addendum height — reasonable starting point
     "hf": 0.375,    # dedendum height — reasonable starting point
-    "s":  0.5,      # s = mu_s * m * z_f = 0.01 * 0.5 * 100
-    "t":  0.3,      # t = mu_t * s = 0.6 * 0.5
+    "mu_s": 0.01,   # ring wall coefficient: s = mu_s * m * z_f
+    "mu_t": 0.6,    # cup wall coefficient: t = mu_t * s
 }
 
 # Pitch radius (fixed, never changes during optimization)
@@ -49,12 +49,12 @@ PARAM_LABELS = {
     "e2":  "O\u2082 y-offset e\u2082",
     "ha":  "Addendum h\u2090",
     "hf":  "Dedendum h\u1DA0",
-    "s":   "Ring wall thick. s",
-    "t":   "Cup wall thick. t",
+    "mu_s": "Coeff μₛ (ring)",
+    "mu_t": "Coeff μₜ (cup)",
 }
 
 # Ordered list of parameter keys for consistent UI ordering
-PARAM_ORDER = ["m", "z_f", "z_c", "w0", "r1", "c1", "e1", "r2", "c2", "e2", "ha", "hf", "s", "t"]
+PARAM_ORDER = ["m", "z_f", "z_c", "w0", "r1", "c1", "e1", "r2", "c2", "e2", "ha", "hf", "mu_s", "mu_t"]
 
 
 def compute_profile(params: dict) -> dict:
@@ -88,8 +88,11 @@ def compute_profile(params: dict) -> dict:
     e2 = params["e2"]
     ha = params["ha"]
     hf = params["hf"]
-    s  = params["s"]
-    t  = params["t"]
+    # Compute s and t from coefficient inputs
+    mu_s = params["mu_s"]
+    mu_t = params["mu_t"]
+    s = mu_s * m * z_f
+    t = mu_t * s
 
     # ── Equation 1 ─────────────────────────────────────────────────
     # ds: distance from dedendum circle to neutral layer
@@ -197,6 +200,8 @@ def compute_profile(params: dict) -> dict:
         "rp": rp,
         "rm": rm,
         "ds": ds,
+        "s": s,
+        "t": t,
         "alpha": alpha,
         "delta": delta,
         "x1_R": x1_R,
@@ -650,6 +655,8 @@ def compute_conjugate_profile(params: dict,
         "seg_branches": seg_branches,
         "raw_roots": raw_roots,
         "rp_c": rp_c,
+        "s": prof["s"],
+        "t": prof["t"],
         "n_pts": len(conjugate_pts),
         "n_branches": len(branches),
     }
@@ -983,6 +990,8 @@ def build_full_flexspline(params: dict, n_ded_arc: int = 8) -> dict:
         "rp": rp,
         "rm": rm,
         "ds": ds,
+        "s": result["s"],
+        "t": result["t"],
         "ha": ha,
         "hf": hf,
         "z_f": z_f,
@@ -1016,10 +1025,15 @@ def build_full_circular_spline(params: dict,
         return {"error": "Smoothed flank too short to pattern."}
 
     z_c = int(params["z_c"])
+    m   = params["m"]
+    z_f = params["z_f"]
     ha  = params["ha"]
     hf  = params["hf"]
-    s   = params["s"]
-    t   = params["t"]
+    # Compute s and t from coefficient inputs
+    mu_s = params["mu_s"]
+    mu_t = params["mu_t"]
+    s = mu_s * m * z_f
+    t = mu_t * s
     ds  = s - t / 2.0
 
     # Right flank: addendum (top) → dedendum (bottom), y descending

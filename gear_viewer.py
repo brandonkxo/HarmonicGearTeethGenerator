@@ -213,6 +213,7 @@ class Tab21:
         deg = math.degrees
         self.info_var.set(
             f"rp = {result['rp']:.2f} mm (pitch radius)\n"
+            f"s = {result['s']:.4f} mm  t = {result['t']:.4f} mm\n"
             f"ds = {result['ds']:.4f} mm\n"
             f"\u03b1  = {deg(result['alpha']):.2f}\u00b0\n"
             f"\u03b4  = {deg(result['delta']):.2f}\u00b0\n"
@@ -428,9 +429,10 @@ class Tab22:
         total_raw = sum(seg_counts.values())
         self.info_var.set(
             f"rp_c = {result['rp_c']:.2f} mm\n"
+            f"s = {result['s']:.4f} mm  t = {result['t']:.4f} mm\n"
             f"AB: {seg_counts['AB']}  BC: {seg_counts['BC']}  "
             f"CD: {seg_counts['CD']}  ({total_raw} total)\n"
-            f"Smoothing s = {s_val}"
+            f"Smoothing = {s_val}"
         )
 
 
@@ -722,6 +724,7 @@ class TabFlexspline:
         n_pts = len(full["chain_xy"])
         self.info_var.set(
             f"rp = {rp:.2f} mm   rm = {rm:.4f} mm\n"
+            f"s = {full['s']:.4f} mm  t = {full['t']:.4f} mm\n"
             f"r_add = {r_add:.4f}  r_ded = {r_ded:.4f}\n"
             f"z_f = {z_f}  chain pts: {n_pts}\n"
             f"ha = {ha:.3f}  hf = {hf:.3f}  ds = {ds:.4f}"
@@ -1031,6 +1034,7 @@ class TabCircularSpline:
         n_pts = len(chain)
         self.info_var.set(
             f"rp_c = {rp_c:.2f} mm\n"
+            f"s = {conj['s']:.4f} mm  t = {conj['t']:.4f} mm\n"
             f"r_add = {r_add:.4f}  r_ded = {r_ded:.4f}\n"
             f"z_c = {z_c}  chain pts: {n_pts}\n"
             f"ha = {ha:.3f}  hf = {hf:.3f}"
@@ -1272,6 +1276,7 @@ class TabOverlay:
 
         # ── Info ──
         self.info_var.set(
+            f"s = {fs['s']:.4f} mm  t = {fs['t']:.4f} mm\n"
             f"Flexspline (blue):  z_f={fs['z_f']}  "
             f"rp={rp_f:.2f}\n"
             f"Circ. spline (red): z_c={cs['z_c']}  "
