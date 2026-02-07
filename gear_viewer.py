@@ -105,6 +105,42 @@ def _canvas_plot_px(canvas: tk.Canvas) -> int:
     return min(w, h) - MARGIN - 30
 
 
+# ── Output category definitions ───────────────────────────────────
+
+OUTPUT_CATEGORIES_TAB21 = {
+    "Wall Thickness": ["s", "t", "ds"],
+    "Deformation Angles": ["alpha", "delta"],
+    "Arc Lengths": ["l1", "l2", "l3", "h1"],
+    "Pitch Geometry": ["rp"],
+}
+
+OUTPUT_CATEGORIES_TAB22 = {
+    "Wall Thickness": ["s", "t"],
+    "Pitch Geometry": ["rp_c"],
+    "Segment Counts": ["seg_counts"],
+}
+
+OUTPUT_CATEGORIES_FLEXSPLINE = {
+    "Wall Thickness": ["s", "t", "ds"],
+    "Circle Radii": ["rp", "rm", "r_add", "r_ded"],
+    "Tooth Heights": ["ha", "hf"],
+    "Mesh Info": ["z_f", "n_pts"],
+}
+
+OUTPUT_CATEGORIES_CIRCSPLINE = {
+    "Wall Thickness": ["s", "t"],
+    "Circle Radii": ["rp_c", "r_add", "r_ded"],
+    "Tooth Heights": ["ha", "hf"],
+    "Mesh Info": ["z_c", "n_pts"],
+}
+
+OUTPUT_CATEGORIES_OVERLAY = {
+    "Wall Thickness": ["s", "t"],
+    "Flexspline": ["z_f", "rp"],
+    "Circular Spline": ["z_c", "rp_c"],
+}
+
+
 # ── Tab 2.1: Flexspline Tooth Profile ─────────────────────────────
 
 class Tab21:
@@ -114,6 +150,7 @@ class Tab21:
                  shared_vars: dict[str, tk.StringVar]):
         self.frame = parent
         self.entries = shared_vars
+        self._last_result = None
 
         # Left: parameters
         left = ttk.Frame(parent, padding=10)
@@ -137,10 +174,29 @@ class Tab21:
             row=row, column=0, columnspan=2, pady=10)
         row += 1
 
+        # Output category dropdown
+        ttk.Separator(left, orient="horizontal").grid(
+            row=row, column=0, columnspan=2, sticky="ew", pady=6)
+        row += 1
+
+        ttk.Label(left, text="Output Category",
+                  font=("Consolas", 9, "bold")).grid(
+            row=row, column=0, columnspan=2, sticky="w")
+        row += 1
+
+        self.category_var = tk.StringVar(value=list(OUTPUT_CATEGORIES_TAB21.keys())[0])
+        self.category_combo = ttk.Combobox(
+            left, textvariable=self.category_var,
+            values=list(OUTPUT_CATEGORIES_TAB21.keys()),
+            state="readonly", width=18, font=("Consolas", 9))
+        self.category_combo.grid(row=row, column=0, columnspan=2, pady=4, sticky="w")
+        self.category_combo.bind("<<ComboboxSelected>>", lambda e: self._update_info())
+        row += 1
+
         self.info_var = tk.StringVar(value="")
         ttk.Label(left, textvariable=self.info_var, font=("Consolas", 8),
                   foreground="grey30", wraplength=200, justify="left").grid(
-            row=row, column=0, columnspan=2, sticky="w")
+            row=row, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         # Right: canvas (expands with window)
         self.canvas = tk.Canvas(parent, bg="white")
@@ -160,6 +216,34 @@ class Tab21:
                 return None
         return params
 
+    def _update_info(self):
+        """Update the info display based on selected category."""
+        if self._last_result is None:
+            return
+
+        result = self._last_result
+        category = self.category_var.get()
+        deg = math.degrees
+
+        if category == "Wall Thickness":
+            self.info_var.set(
+                f"s = {result['s']:.4f} mm\n"
+                f"t = {result['t']:.4f} mm\n"
+                f"ds = {result['ds']:.4f} mm")
+        elif category == "Deformation Angles":
+            self.info_var.set(
+                f"α = {deg(result['alpha']):.2f}°\n"
+                f"δ = {deg(result['delta']):.2f}°")
+        elif category == "Arc Lengths":
+            self.info_var.set(
+                f"l1 = {result['l1']:.4f} mm\n"
+                f"l2 = {result['l2']:.4f} mm\n"
+                f"l3 = {result['l3']:.4f} mm\n"
+                f"h1 = {result['h1']:.4f} mm")
+        elif category == "Pitch Geometry":
+            self.info_var.set(
+                f"rp = {result['rp']:.2f} mm (pitch radius)")
+
     def redraw(self):
         c = self.canvas
         c.delete("all")
@@ -175,7 +259,10 @@ class Tab21:
         result = compute_profile(params)
         if "error" in result:
             self.info_var.set(f"Error: {result['error']}")
+            self._last_result = None
             return
+
+        self._last_result = result
 
         ds = result["ds"]
         hf = params["hf"]
@@ -210,17 +297,7 @@ class Tab21:
         mirrored = [(-x, y) for x, y in all_pts]
         draw_polyline(c, mirrored, "grey50", to_px)
 
-        deg = math.degrees
-        self.info_var.set(
-            f"rp = {result['rp']:.2f} mm (pitch radius)\n"
-            f"s = {result['s']:.4f} mm  t = {result['t']:.4f} mm\n"
-            f"ds = {result['ds']:.4f} mm\n"
-            f"\u03b1  = {deg(result['alpha']):.2f}\u00b0\n"
-            f"\u03b4  = {deg(result['delta']):.2f}\u00b0\n"
-            f"h1 = {result['h1']:.4f} mm\n"
-            f"l1 = {result['l1']:.4f}  l2 = {result['l2']:.4f}\n"
-            f"l3 = {result['l3']:.4f}"
-        )
+        self._update_info()
 
 
 # ── Tab 2.2: Conjugate Circular Spline ────────────────────────────
@@ -297,13 +374,33 @@ class Tab22:
             side=tk.LEFT)
         row += 1
 
+        # Output category dropdown
+        ttk.Separator(left, orient="horizontal").grid(
+            row=row, column=0, columnspan=2, sticky="ew", pady=6)
+        row += 1
+
+        ttk.Label(left, text="Output Category",
+                  font=("Consolas", 9, "bold")).grid(
+            row=row, column=0, columnspan=2, sticky="w")
+        row += 1
+
+        self.category_var = tk.StringVar(value=list(OUTPUT_CATEGORIES_TAB22.keys())[0])
+        self.category_combo = ttk.Combobox(
+            left, textvariable=self.category_var,
+            values=list(OUTPUT_CATEGORIES_TAB22.keys()),
+            state="readonly", width=18, font=("Consolas", 9))
+        self.category_combo.grid(row=row, column=0, columnspan=2, pady=4, sticky="w")
+        self.category_combo.bind("<<ComboboxSelected>>", lambda e: self._update_info())
+        row += 1
+
         self.info_var = tk.StringVar(value="Click Update to compute.")
         ttk.Label(left, textvariable=self.info_var, font=("Consolas", 8),
                   foreground="grey30", wraplength=200, justify="left").grid(
-            row=row, column=0, columnspan=2, sticky="w")
+            row=row, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         self._last_result = None
         self._last_params = None
+        self._last_seg_counts = None
 
         # Right: canvas (expands with window)
         self.canvas = tk.Canvas(parent, bg="white")
@@ -368,6 +465,32 @@ class Tab22:
         total = len(raw_roots)
         self.info_var.set(f"Exported {total} pts\n→ {os.path.basename(path)}")
 
+    def _update_info(self):
+        """Update the info display based on selected category."""
+        if self._last_result is None:
+            return
+
+        result = self._last_result
+        category = self.category_var.get()
+
+        if category == "Wall Thickness":
+            self.info_var.set(
+                f"s = {result['s']:.4f} mm\n"
+                f"t = {result['t']:.4f} mm")
+        elif category == "Pitch Geometry":
+            self.info_var.set(
+                f"rp_c = {result['rp_c']:.2f} mm\n"
+                f"(circular spline pitch radius)")
+        elif category == "Segment Counts":
+            if self._last_seg_counts:
+                sc = self._last_seg_counts
+                total = sum(sc.values())
+                self.info_var.set(
+                    f"AB: {sc['AB']} points\n"
+                    f"BC: {sc['BC']} points\n"
+                    f"CD: {sc['CD']} points\n"
+                    f"Total: {total} points")
+
     def redraw(self):
         c = self.canvas
         c.delete("all")
@@ -426,14 +549,8 @@ class Tab22:
             mirrored = [(-x, y) for x, y in flank]
             draw_polyline(c, mirrored, "grey50", to_px)
 
-        total_raw = sum(seg_counts.values())
-        self.info_var.set(
-            f"rp_c = {result['rp_c']:.2f} mm\n"
-            f"s = {result['s']:.4f} mm  t = {result['t']:.4f} mm\n"
-            f"AB: {seg_counts['AB']}  BC: {seg_counts['BC']}  "
-            f"CD: {seg_counts['CD']}  ({total_raw} total)\n"
-            f"Smoothing = {s_val}"
-        )
+        self._last_seg_counts = seg_counts
+        self._update_info()
 
 
 # ── Tab 3: Flexspline Full Geometry ────────────────────────────────
@@ -445,6 +562,7 @@ class TabFlexspline:
                  shared_vars: dict[str, tk.StringVar]):
         self.frame = parent
         self.entries = shared_vars
+        self._last_full = None
 
         # Left: parameters
         left = ttk.Frame(parent, padding=10)
@@ -478,10 +596,29 @@ class TabFlexspline:
 
         self._last_chain = None  # Cache for export
 
+        # Output category dropdown
+        ttk.Separator(left, orient="horizontal").grid(
+            row=row, column=0, columnspan=2, sticky="ew", pady=6)
+        row += 1
+
+        ttk.Label(left, text="Output Category",
+                  font=("Consolas", 9, "bold")).grid(
+            row=row, column=0, columnspan=2, sticky="w")
+        row += 1
+
+        self.category_var = tk.StringVar(value=list(OUTPUT_CATEGORIES_FLEXSPLINE.keys())[0])
+        self.category_combo = ttk.Combobox(
+            left, textvariable=self.category_var,
+            values=list(OUTPUT_CATEGORIES_FLEXSPLINE.keys()),
+            state="readonly", width=18, font=("Consolas", 9))
+        self.category_combo.grid(row=row, column=0, columnspan=2, pady=4, sticky="w")
+        self.category_combo.bind("<<ComboboxSelected>>", lambda e: self._update_info())
+        row += 1
+
         self.info_var = tk.StringVar(value="Click Update to draw tooth.")
         ttk.Label(left, textvariable=self.info_var, font=("Consolas", 8),
                   foreground="grey30", wraplength=200, justify="left").grid(
-            row=row, column=0, columnspan=2, sticky="w")
+            row=row, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         # Right: canvas (expands with window)
         self.canvas = tk.Canvas(parent, bg="white")
@@ -541,6 +678,43 @@ class TabFlexspline:
                 return None
         return params
 
+    def _update_info(self):
+        """Update the info display based on selected category."""
+        if self._last_full is None:
+            return
+
+        full = self._last_full
+        category = self.category_var.get()
+
+        # Compute derived radii
+        rm = full["rm"]
+        ds = full["ds"]
+        ha = full["ha"]
+        hf = full["hf"]
+        r_ded = rm + ds
+        r_add = rm + ds + hf + ha
+
+        if category == "Wall Thickness":
+            self.info_var.set(
+                f"s = {full['s']:.4f} mm\n"
+                f"t = {full['t']:.4f} mm\n"
+                f"ds = {ds:.4f} mm")
+        elif category == "Circle Radii":
+            self.info_var.set(
+                f"rp = {full['rp']:.4f} mm (pitch)\n"
+                f"rm = {rm:.4f} mm (neutral)\n"
+                f"r_add = {r_add:.4f} mm\n"
+                f"r_ded = {r_ded:.4f} mm")
+        elif category == "Tooth Heights":
+            self.info_var.set(
+                f"ha = {ha:.4f} mm (addendum)\n"
+                f"hf = {hf:.4f} mm (dedendum)")
+        elif category == "Mesh Info":
+            n_pts = len(full["chain_xy"])
+            self.info_var.set(
+                f"z_f = {full['z_f']} teeth\n"
+                f"Chain points: {n_pts}")
+
     def redraw(self):
         c = self.canvas
         c.delete("all")
@@ -552,7 +726,10 @@ class TabFlexspline:
         full = build_full_flexspline(params)
         if "error" in full:
             self.info_var.set(f"Error: {full['error']}")
+            self._last_full = None
             return
+
+        self._last_full = full
 
         rp = full["rp"]
         rm = full["rm"]
@@ -720,15 +897,7 @@ class TabFlexspline:
                 coords.extend([px, py])
             c.create_line(*coords, fill="#2266cc", width=2, smooth=False)
 
-        # ── Info ──
-        n_pts = len(full["chain_xy"])
-        self.info_var.set(
-            f"rp = {rp:.2f} mm   rm = {rm:.4f} mm\n"
-            f"s = {full['s']:.4f} mm  t = {full['t']:.4f} mm\n"
-            f"r_add = {r_add:.4f}  r_ded = {r_ded:.4f}\n"
-            f"z_f = {z_f}  chain pts: {n_pts}\n"
-            f"ha = {ha:.3f}  hf = {hf:.3f}  ds = {ds:.4f}"
-        )
+        self._update_info()
 
 
 # ── Tab 4: Circular Spline Full Geometry ──────────────────────────
@@ -781,14 +950,34 @@ class TabCircularSpline:
             side=tk.LEFT)
         row += 1
 
+        # Output category dropdown
+        ttk.Separator(left, orient="horizontal").grid(
+            row=row, column=0, columnspan=2, sticky="ew", pady=6)
+        row += 1
+
+        ttk.Label(left, text="Output Category",
+                  font=("Consolas", 9, "bold")).grid(
+            row=row, column=0, columnspan=2, sticky="w")
+        row += 1
+
+        self.category_var = tk.StringVar(value=list(OUTPUT_CATEGORIES_CIRCSPLINE.keys())[0])
+        self.category_combo = ttk.Combobox(
+            left, textvariable=self.category_var,
+            values=list(OUTPUT_CATEGORIES_CIRCSPLINE.keys()),
+            state="readonly", width=18, font=("Consolas", 9))
+        self.category_combo.grid(row=row, column=0, columnspan=2, pady=4, sticky="w")
+        self.category_combo.bind("<<ComboboxSelected>>", lambda e: self._update_info())
+        row += 1
+
         self.info_var = tk.StringVar(value="Click Update to compute.")
         ttk.Label(left, textvariable=self.info_var, font=("Consolas", 8),
                   foreground="grey30", wraplength=200, justify="left").grid(
-            row=row, column=0, columnspan=2, sticky="w")
+            row=row, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         self._last_conj = None
         self._last_params_key = None
         self._last_chain = None  # Cache for export
+        self._last_full = None
 
         # Right: canvas (expands with window)
         self.canvas = tk.Canvas(parent, bg="white")
@@ -847,6 +1036,34 @@ class TabCircularSpline:
                 self.info_var.set(f"Invalid number for {key}")
                 return None
         return params
+
+    def _update_info(self):
+        """Update the info display based on selected category."""
+        if self._last_full is None or self._last_conj is None:
+            return
+
+        full = self._last_full
+        conj = self._last_conj
+        category = self.category_var.get()
+
+        if category == "Wall Thickness":
+            self.info_var.set(
+                f"s = {conj['s']:.4f} mm\n"
+                f"t = {conj['t']:.4f} mm")
+        elif category == "Circle Radii":
+            self.info_var.set(
+                f"rp_c = {full['rp_c']:.4f} mm (pitch)\n"
+                f"r_add = {full['r_add']:.4f} mm\n"
+                f"r_ded = {full['r_ded']:.4f} mm")
+        elif category == "Tooth Heights":
+            self.info_var.set(
+                f"ha = {full['ha']:.4f} mm (addendum)\n"
+                f"hf = {full['hf']:.4f} mm (dedendum)")
+        elif category == "Mesh Info":
+            n_pts = len(full["chain_xy"])
+            self.info_var.set(
+                f"z_c = {full['z_c']} teeth\n"
+                f"Chain points: {n_pts}")
 
     def redraw(self):
         c = self.canvas
@@ -1030,15 +1247,8 @@ class TabCircularSpline:
                 coords.extend([px, py])
             c.create_line(*coords, fill="#cc3333", width=2, smooth=False)
 
-        # ── Info ──
-        n_pts = len(chain)
-        self.info_var.set(
-            f"rp_c = {rp_c:.2f} mm\n"
-            f"s = {conj['s']:.4f} mm  t = {conj['t']:.4f} mm\n"
-            f"r_add = {r_add:.4f}  r_ded = {r_ded:.4f}\n"
-            f"z_c = {z_c}  chain pts: {n_pts}\n"
-            f"ha = {ha:.3f}  hf = {hf:.3f}"
-        )
+        self._last_full = full
+        self._update_info()
 
 
 # ── Tab 5: Overlay — Flexspline + Circular Spline ────────────────
@@ -1105,13 +1315,34 @@ class TabOverlay:
                   font=("Consolas", 8)).pack(side=tk.LEFT)
         row += 1
 
+        # Output category dropdown
+        ttk.Separator(left, orient="horizontal").grid(
+            row=row, column=0, columnspan=2, sticky="ew", pady=6)
+        row += 1
+
+        ttk.Label(left, text="Output Category",
+                  font=("Consolas", 9, "bold")).grid(
+            row=row, column=0, columnspan=2, sticky="w")
+        row += 1
+
+        self.category_var = tk.StringVar(value=list(OUTPUT_CATEGORIES_OVERLAY.keys())[0])
+        self.category_combo = ttk.Combobox(
+            left, textvariable=self.category_var,
+            values=list(OUTPUT_CATEGORIES_OVERLAY.keys()),
+            state="readonly", width=18, font=("Consolas", 9))
+        self.category_combo.grid(row=row, column=0, columnspan=2, pady=4, sticky="w")
+        self.category_combo.bind("<<ComboboxSelected>>", lambda e: self._update_info())
+        row += 1
+
         self.info_var = tk.StringVar(value="Click Update to compute.")
         ttk.Label(left, textvariable=self.info_var, font=("Consolas", 8),
                   foreground="grey30", wraplength=200, justify="left").grid(
-            row=row, column=0, columnspan=2, sticky="w")
+            row=row, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         self._last_conj = None
         self._last_params_key = None
+        self._last_fs = None
+        self._last_cs = None
 
         # Right: canvas
         self.canvas = tk.Canvas(parent, bg="white")
@@ -1134,6 +1365,28 @@ class TabOverlay:
                 return None
         return params
 
+    def _update_info(self):
+        """Update the info display based on selected category."""
+        if self._last_fs is None or self._last_cs is None:
+            return
+
+        fs = self._last_fs
+        cs = self._last_cs
+        category = self.category_var.get()
+
+        if category == "Wall Thickness":
+            self.info_var.set(
+                f"s = {fs['s']:.4f} mm\n"
+                f"t = {fs['t']:.4f} mm")
+        elif category == "Flexspline":
+            self.info_var.set(
+                f"z_f = {fs['z_f']} teeth\n"
+                f"rp = {fs['rp']:.4f} mm")
+        elif category == "Circular Spline":
+            self.info_var.set(
+                f"z_c = {cs['z_c']} teeth\n"
+                f"rp_c = {cs['rp_c']:.4f} mm")
+
     def redraw(self):
         c = self.canvas
         c.delete("all")
@@ -1152,6 +1405,7 @@ class TabOverlay:
         fs = build_full_flexspline(params)
         if "error" in fs:
             self.info_var.set(f"Flexspline error: {fs['error']}")
+            self._last_fs = None
             return
 
         # ── Build circular spline chain (with cached conjugate) ──
@@ -1175,6 +1429,7 @@ class TabOverlay:
         cs = build_full_circular_spline(params, flank, rp_c)
         if "error" in cs:
             self.info_var.set(f"Circ. spline error: {cs['error']}")
+            self._last_cs = None
             return
 
         rp_f = fs["rp"]
@@ -1274,14 +1529,9 @@ class TabOverlay:
                     coords.extend([px, py])
                 c.create_line(*coords, fill=color, width=2, smooth=False)
 
-        # ── Info ──
-        self.info_var.set(
-            f"s = {fs['s']:.4f} mm  t = {fs['t']:.4f} mm\n"
-            f"Flexspline (blue):  z_f={fs['z_f']}  "
-            f"rp={rp_f:.2f}\n"
-            f"Circ. spline (red): z_c={cs['z_c']}  "
-            f"rp_c={rp_cs:.2f}"
-        )
+        self._last_fs = fs
+        self._last_cs = cs
+        self._update_info()
 
 
 # ── Main App ───────────────────────────────────────────────────────
