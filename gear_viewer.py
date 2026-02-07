@@ -1299,7 +1299,9 @@ class TabOverlay:
         self._zoomed = False
         self._zoom_btn = ttk.Button(btn_frame, text="Zoom In",
                                     command=self._toggle_zoom)
-        self._zoom_btn.pack(side=tk.LEFT)
+        self._zoom_btn.pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(btn_frame, text="Export Wave Gen",
+                   command=self._export_wave_gen).pack(side=tk.LEFT)
         row += 1
 
         # Legend
@@ -1354,6 +1356,47 @@ class TabOverlay:
         self._zoomed = not self._zoomed
         self._zoom_btn.config(text="Zoom Out" if self._zoomed else "Zoom In")
         self.redraw()
+
+    def _export_wave_gen(self):
+        """Export deformed inner wall (wave generator profile) as .sldcrv."""
+        if self._last_fs is None:
+            self.info_var.set("No data. Click Update first.")
+            return
+
+        params = self._read_params()
+        if params is None:
+            return
+
+        rm = self._last_fs["rm"]
+        t = self._last_fs["t"]
+        w0 = params["w0"]
+
+        # Inner wall radius = neutral layer minus half cup wall thickness
+        r_inner = rm - t / 2.0
+
+        path = filedialog.asksaveasfilename(
+            defaultextension=".sldcrv",
+            filetypes=[("SolidWorks Curve", "*.sldcrv"), ("All files", "*.*")],
+            initialfile="wave_generator.sldcrv",
+        )
+        if not path:
+            return
+
+        # Generate points along deformed inner wall: ρ = (rm - t/2) + w0·cos(2φ)
+        n_pts = 360
+        points = []
+        for i in range(n_pts + 1):
+            phi = 2.0 * math.pi * i / n_pts
+            rho = r_inner + w0 * math.cos(2.0 * phi)
+            x = rho * math.sin(phi)
+            y = rho * math.cos(phi)
+            points.append((x, y))
+
+        with open(path, "w") as f:
+            for x, y in points:
+                f.write(f"{x:.6f},{y:.6f},0\n")
+
+        self.info_var.set(f"Exported {len(points)} pts\n-> {os.path.basename(path)}")
 
     def _read_params(self) -> dict | None:
         params = {}
