@@ -26,7 +26,8 @@ if sys.platform == "win32":
 from equations import (DEFAULTS, PARAM_LABELS, PARAM_ORDER, PITCH_RADIUS,
                        compute_profile, compute_conjugate_profile,
                        smooth_conjugate_profile, build_full_flexspline,
-                       build_full_circular_spline)
+                       build_deformed_flexspline, build_full_circular_spline,
+                       eq14_rho)
 
 # ── Viewport settings ──────────────────────────────────────────────
 HALF_VIEW_MM = 1.5
@@ -594,6 +595,13 @@ class TabFlexspline:
             side=tk.LEFT)
         row += 1
 
+        # Deformed view toggle button
+        self._deformed = False
+        self._deform_btn = ttk.Button(left, text="Show Deformed",
+                                      command=self._toggle_deformed)
+        self._deform_btn.grid(row=row, column=0, columnspan=2, pady=(0, 6))
+        row += 1
+
         self._last_chain = None  # Cache for export
 
         # Output category dropdown
@@ -629,6 +637,11 @@ class TabFlexspline:
     def _toggle_zoom(self):
         self._zoomed = not self._zoomed
         self._zoom_btn.config(text="Zoom Out" if self._zoomed else "Zoom In")
+        self.redraw()
+
+    def _toggle_deformed(self):
+        self._deformed = not self._deformed
+        self._deform_btn.config(text="Show Undeformed" if self._deformed else "Show Deformed")
         self.redraw()
 
     def _export_sldcrv(self):
@@ -700,20 +713,31 @@ class TabFlexspline:
                 f"t = {full['t']:.4f} mm\n"
                 f"ds = {ds:.4f} mm")
         elif category == "Circle Radii":
-            self.info_var.set(
-                f"rp = {full['rp']:.4f} mm (pitch)\n"
-                f"rm = {rm:.4f} mm (neutral)\n"
-                f"r_add = {r_add:.4f} mm\n"
-                f"r_ded = {r_ded:.4f} mm")
+            w0 = full.get("w0", 0)
+            if self._deformed and w0 > 0:
+                self.info_var.set(
+                    f"rp = {full['rp']:.4f} mm (pitch)\n"
+                    f"rm = {rm:.4f} mm (neutral)\n"
+                    f"w0 = {w0:.4f} mm (deform)\n"
+                    f"rho_max = {rm + w0:.4f} mm\n"
+                    f"rho_min = {rm - w0:.4f} mm")
+            else:
+                self.info_var.set(
+                    f"rp = {full['rp']:.4f} mm (pitch)\n"
+                    f"rm = {rm:.4f} mm (neutral)\n"
+                    f"r_add = {r_add:.4f} mm\n"
+                    f"r_ded = {r_ded:.4f} mm")
         elif category == "Tooth Heights":
             self.info_var.set(
                 f"ha = {ha:.4f} mm (addendum)\n"
                 f"hf = {hf:.4f} mm (dedendum)")
         elif category == "Mesh Info":
             n_pts = len(full["chain_xy"])
+            mode = "Deformed" if self._deformed else "Undeformed"
             self.info_var.set(
                 f"z_f = {full['z_f']} teeth\n"
-                f"Chain points: {n_pts}")
+                f"Chain points: {n_pts}\n"
+                f"Mode: {mode}")
 
     def redraw(self):
         c = self.canvas
@@ -723,7 +747,12 @@ class TabFlexspline:
         if params is None:
             return
 
-        full = build_full_flexspline(params)
+        # Use deformed or undeformed flexspline based on toggle state
+        if self._deformed:
+            full = build_deformed_flexspline(params)
+        else:
+            full = build_full_flexspline(params)
+
         if "error" in full:
             self.info_var.set(f"Error: {full['error']}")
             self._last_full = None
@@ -737,6 +766,7 @@ class TabFlexspline:
         ha = full["ha"]
         hf = full["hf"]
         z_f = full["z_f"]
+        w0 = full.get("w0", 0)  # Only present in deformed result
 
         # Reference radii
         r_ded = rm + ds             # dedendum circle radius
@@ -844,20 +874,27 @@ class TabFlexspline:
         c.create_text(14, plot_px / 2, text="Y\n(mm)",
                       font=("Consolas", 9, "bold"))
 
-        # ── Draw reference circles ──
+        # ── Draw reference circles/curves ──
+        # When deformed, draw elliptical curves following ρ(φ) = rm + w0*cos(2φ)
         # When zoomed, only draw arcs spanning the visible angular range
         if self._zoomed:
             theta_span = 2.0 * half_view / rp * 1.5
             theta_center = math.atan2(cx_view, cy_view)
             n_arc = 200
-            for radius, color, label in [
-                (r_add, "#9999ff", "Addendum"),
-                (r_pit, "#66cc66", "Pitch"),
-                (r_ded, "#ff9999", "Dedendum"),
+            for radius_offset, color, label in [
+                (ds + hf + ha, "#9999ff", "Addendum"),
+                (ds + hf, "#66cc66", "Pitch"),
+                (ds, "#ff9999", "Dedendum"),
             ]:
                 arc_coords = []
                 for i in range(n_arc + 1):
                     th = theta_center - theta_span/2 + theta_span * i / n_arc
+                    if self._deformed:
+                        # Deformed radius at this angle
+                        rho = eq14_rho(th, rm, w0)
+                        radius = rho + radius_offset
+                    else:
+                        radius = rm + radius_offset
                     ax = radius * math.sin(th)
                     ay = radius * math.cos(th)
                     px, py = to_px(ax, ay)
@@ -869,21 +906,31 @@ class TabFlexspline:
                               font=("Consolas", 7), fill=color, anchor="w")
         else:
             n_circ = 360
-            for radius, color, label in [
-                (r_add, "#9999ff", "Addendum"),
-                (r_pit, "#66cc66", "Pitch"),
-                (r_ded, "#ff9999", "Dedendum"),
+            for radius_offset, color, label in [
+                (ds + hf + ha, "#9999ff", "Addendum"),
+                (ds + hf, "#66cc66", "Pitch"),
+                (ds, "#ff9999", "Dedendum"),
             ]:
                 circ_coords = []
                 for i in range(n_circ + 1):
                     th = 2 * math.pi * i / n_circ
+                    if self._deformed:
+                        # Deformed radius at this angle
+                        rho = eq14_rho(th, rm, w0)
+                        radius = rho + radius_offset
+                    else:
+                        radius = rm + radius_offset
                     cx_mm = radius * math.sin(th)
                     cy_mm = radius * math.cos(th)
                     px, py = to_px(cx_mm, cy_mm)
                     circ_coords.extend([px, py])
                 if len(circ_coords) >= 4:
                     c.create_line(*circ_coords, fill=color, dash=(4, 3), width=1)
-                lx, ly = to_px(0, radius)
+                # Label position: use max radius (at th=0) for deformed
+                label_radius = rm + radius_offset
+                if self._deformed:
+                    label_radius = rm + w0 + radius_offset
+                lx, ly = to_px(0, label_radius)
                 c.create_text(lx + 4, ly - 8, text=label,
                               font=("Consolas", 7), fill=color, anchor="w")
 
