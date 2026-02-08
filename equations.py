@@ -1066,28 +1066,17 @@ def build_deformed_flexspline(params: dict, n_ded_arc: int = 8) -> dict:
             chain_xy.append(tooth_point_global(xr, yr, phi))
 
         # Dedendum arc: D of tooth i → D' of tooth i+1
-        # Use transformed endpoints to ensure continuity
+        # Get the actual transformed endpoints
         xD,  yD  = tooth_point_global(pt_D[0],  pt_D[1],  phi)
         xDp, yDp = tooth_point_global(pt_Dp[0], pt_Dp[1], phi_next)
 
-        thD  = math.atan2(xD,  yD)
-        thDp = math.atan2(xDp, yDp)
-        if thDp < thD:
-            thDp += 2.0 * math.pi
-
+        # Linear interpolation in Cartesian space for smooth connection
+        # This guarantees the arc connects exactly to the flank endpoints
         for j in range(1, n_ded_arc + 1):
             frac = j / n_ded_arc
-            th = thD + frac * (thDp - thD)
-
-            # Interpolate deformation along the arc
-            dphi = (phi_next - phi) if phi_next > phi else (phi_next + 2*math.pi - phi)
-            phi_arc = phi + frac * dphi
-            if phi_arc > 2*math.pi:
-                phi_arc -= 2*math.pi
-
-            rho_arc = eq14_rho(phi_arc, rm, w0)
-            r_ded = rho_arc + ds
-            chain_xy.append((r_ded * math.sin(th), r_ded * math.cos(th)))
+            x_arc = xD + frac * (xDp - xD)
+            y_arc = yD + frac * (yDp - yD)
+            chain_xy.append((x_arc, y_arc))
 
     return {
         "chain_xy": chain_xy,
