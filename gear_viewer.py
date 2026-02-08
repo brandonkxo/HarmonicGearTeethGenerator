@@ -650,10 +650,13 @@ class TabFlexspline:
             self.info_var.set("No data to export. Click Update first.")
             return
 
+        # Use different default filename for deformed vs undeformed
+        default_name = "flexspline_deformed.sldcrv" if self._deformed else "flexspline.sldcrv"
+
         path = filedialog.asksaveasfilename(
             defaultextension=".sldcrv",
             filetypes=[("SolidWorks Curve", "*.sldcrv"), ("All files", "*.*")],
-            initialfile="flexspline.sldcrv",
+            initialfile=default_name,
         )
         if not path:
             return
@@ -679,7 +682,8 @@ class TabFlexspline:
             for x, y in filtered:
                 f.write(f"{x:.6f},{y:.6f},0\n")
 
-        self.info_var.set(f"Exported {len(filtered)} points\n({removed} duplicates removed)\n-> {os.path.basename(path)}")
+        mode = "deformed" if self._deformed else "undeformed"
+        self.info_var.set(f"Exported {len(filtered)} pts ({mode})\n({removed} duplicates removed)\n-> {os.path.basename(path)}")
 
     def _read_params(self) -> dict | None:
         params = {}
