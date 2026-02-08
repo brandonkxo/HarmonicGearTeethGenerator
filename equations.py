@@ -1001,13 +1001,12 @@ def build_full_flexspline(params: dict, n_ded_arc: int = 8) -> dict:
 def build_deformed_flexspline(params: dict, n_ded_arc: int = 8) -> dict:
     """Pattern the flexspline around the DEFORMED neutral layer.
 
-    Uses the wave generator deformation model (Eqs 14-27) to show
+    Uses the paper's coordinate transform (Eqs 14, 21, 23, 27, 29) to show
     how the flexspline actually looks when flexed by the elliptical
     wave generator.
 
-    The deformation at each angular position φ includes:
-      - Radial displacement: ρ(φ) = rm + ω₀·cos(2φ)
-      - Tangent rotation: μ(φ) = (2ω₀/rm)·sin(2φ)
+    Each tooth is treated as a rigid profile in its local frame and placed
+    using the paper's transform with φ₂ = 0 (wave generator at reference).
 
     Returns dict with:
         chain_xy  – list of (X, Y) forming the deformed outline
@@ -1018,14 +1017,11 @@ def build_deformed_flexspline(params: dict, n_ded_arc: int = 8) -> dict:
     if "error" in result:
         return result
 
-    m   = params["m"]
     z_f = int(params["z_f"])
     w0  = params["w0"]
-    rp  = m * z_f / 2.0
-    ha  = params["ha"]
-    hf  = params["hf"]
-    ds  = result["ds"]
+    rp  = params["m"] * z_f / 2.0
     rm  = result["rm"]
+    ds  = result["ds"]
 
     # Single tooth flanks in local coords
     right_flank = list(result["pts_AB"]) + list(result["pts_BC"]) + list(result["pts_CD"])
@@ -1034,84 +1030,61 @@ def build_deformed_flexspline(params: dict, n_ded_arc: int = 8) -> dict:
     # Angular pitch
     pitch_angle = 2.0 * math.pi / z_f
 
-    def deformed_local_to_cartesian(x_loc, y_loc, phi):
-        """Transform local tooth coords to Cartesian on the deformed flexspline.
+    def tooth_point_global(xr, yr, phi):
+        """Transform local tooth point to global using paper's Eq 29.
 
-        At wave generator angle φ:
-          - Neutral layer radius: ρ = rm + ω₀·cos(2φ)
-          - Tangent rotation angle: μ = (2ω₀/rm)·sin(2φ)
-
-        The tooth point at local (x, y) where y is offset from neutral layer:
-          - Radial position: r = ρ + y_loc
-          - Angular position: θ = x_loc / rp + φ (adjusted for curvature)
-          - Rotation: the entire tooth rotates by μ due to bending
+        Uses φ₂ = 0 (wave generator at reference position) so γ = φ₁.
         """
-        # Deformed neutral layer radius at this angle
-        rho = eq14_rho(phi, rm, w0)
+        # Paper-based deformation quantities
+        rho  = eq14_rho(phi, rm, w0)          # Eq 14: deformed neutral layer radius
+        mu   = eq21_mu(phi, w0, rm)           # Eq 21: normal deformation angle
+        phi1 = eq23_phi1(phi, w0, rm)         # Eq 23: deformed endpoint angle
 
-        # Normal deformation angle (tangent rotation due to bending)
-        mu = eq21_mu(phi, w0, rm)
+        # For deformed flexspline shape, set wave generator rotation φ₂ = 0
+        gamma = phi1                          # γ = φ₁ - φ₂, with φ₂ = 0
+        psi   = eq27_psi(mu, gamma)           # Eq 27: ψ = μ + γ
 
-        # Radial position of the point (offset from deformed neutral layer)
-        r = rho + y_loc
-
-        # Base angular position of the point
-        # The x_loc is arc length along the tooth, convert to angle
-        theta_base = x_loc / rp + phi
-
-        # Apply the tangent rotation μ
-        # The tooth rotates about its center by μ
-        theta = theta_base + mu * (y_loc / rm)  # rotation scaled by radial offset
-
-        # Convert to Cartesian
-        X = r * math.sin(theta)
-        Y = r * math.cos(theta)
-        return X, Y
+        # Rigidly place the local tooth point using Eq 29
+        return eq29_transform(xr, yr, psi, rho, gamma)
 
     chain_xy = []
 
+    pt_D  = right_flank[-1]   # bottom of right flank (local)
+    pt_Dp = left_flank[0]     # bottom of left flank (local)
+
     for i in range(z_f):
-        # φ is the wave generator angle for this tooth
-        phi = i * pitch_angle
-
-        # Left flank: D' → A' (dedendum up to addendum)
-        for x_loc, y_loc in left_flank:
-            chain_xy.append(deformed_local_to_cartesian(x_loc, y_loc, phi))
-
-        # Tip is implicit (A' connects to A in the polyline)
-
-        # Right flank: A → D (addendum down to dedendum)
-        for x_loc, y_loc in right_flank:
-            chain_xy.append(deformed_local_to_cartesian(x_loc, y_loc, phi))
-
-        # Dedendum arc: D of tooth i → D' of tooth i+1
-        # Use the actual transformed endpoints to ensure continuity
-        next_i = (i + 1) % z_f
+        phi      = i * pitch_angle
+        next_i   = (i + 1) % z_f
         phi_next = next_i * pitch_angle
 
-        # Get the actual transformed positions of D (end of right flank) and D' (start of next left flank)
-        pt_D = right_flank[-1]
-        pt_Dp = left_flank[0]
-        x_D, y_D = deformed_local_to_cartesian(pt_D[0], pt_D[1], phi)
-        x_Dp, y_Dp = deformed_local_to_cartesian(pt_Dp[0], pt_Dp[1], phi_next)
+        # Left flank: D' → A' (dedendum up to addendum)
+        for xr, yr in left_flank:
+            chain_xy.append(tooth_point_global(xr, yr, phi))
 
-        # Interpolate along the dedendum arc between these two points
-        # Use angular interpolation for smooth arc
-        theta_D = math.atan2(x_D, y_D)
-        theta_Dp = math.atan2(x_Dp, y_Dp)
+        # Right flank: A → D (addendum down to dedendum)
+        for xr, yr in right_flank:
+            chain_xy.append(tooth_point_global(xr, yr, phi))
 
-        # Handle wrap-around
-        if theta_Dp < theta_D:
-            theta_Dp += 2.0 * math.pi
+        # Dedendum arc: D of tooth i → D' of tooth i+1
+        # Use transformed endpoints to ensure continuity
+        xD,  yD  = tooth_point_global(pt_D[0],  pt_D[1],  phi)
+        xDp, yDp = tooth_point_global(pt_Dp[0], pt_Dp[1], phi_next)
+
+        thD  = math.atan2(xD,  yD)
+        thDp = math.atan2(xDp, yDp)
+        if thDp < thD:
+            thDp += 2.0 * math.pi
 
         for j in range(1, n_ded_arc + 1):
             frac = j / n_ded_arc
-            th = theta_D + frac * (theta_Dp - theta_D)
-            # Interpolate phi for deformation
-            phi_arc = phi + frac * (phi_next - phi if phi_next > phi else phi_next + 2*math.pi - phi)
-            if phi_arc > 2 * math.pi:
-                phi_arc -= 2 * math.pi
-            # Deformed radius at dedendum
+            th = thD + frac * (thDp - thD)
+
+            # Interpolate deformation along the arc
+            dphi = (phi_next - phi) if phi_next > phi else (phi_next + 2*math.pi - phi)
+            phi_arc = phi + frac * dphi
+            if phi_arc > 2*math.pi:
+                phi_arc -= 2*math.pi
+
             rho_arc = eq14_rho(phi_arc, rm, w0)
             r_ded = rho_arc + ds
             chain_xy.append((r_ded * math.sin(th), r_ded * math.cos(th)))
@@ -1124,8 +1097,8 @@ def build_deformed_flexspline(params: dict, n_ded_arc: int = 8) -> dict:
         "ds": ds,
         "s": result["s"],
         "t": result["t"],
-        "ha": ha,
-        "hf": hf,
+        "ha": params["ha"],
+        "hf": params["hf"],
         "z_f": z_f,
     }
 
