@@ -1085,31 +1085,35 @@ def build_deformed_flexspline(params: dict, n_ded_arc: int = 8) -> dict:
             chain_xy.append(deformed_local_to_cartesian(x_loc, y_loc, phi))
 
         # Dedendum arc: D of tooth i → D' of tooth i+1
-        # The dedendum follows the deformed inner wall
+        # Use the actual transformed endpoints to ensure continuity
         next_i = (i + 1) % z_f
         phi_next = next_i * pitch_angle
 
-        # Get the angular positions of D and D' in their respective teeth
+        # Get the actual transformed positions of D (end of right flank) and D' (start of next left flank)
         pt_D = right_flank[-1]
         pt_Dp = left_flank[0]
-        theta_D = pt_D[0] / rp + phi
-        theta_Dp = pt_Dp[0] / rp + phi_next
+        x_D, y_D = deformed_local_to_cartesian(pt_D[0], pt_D[1], phi)
+        x_Dp, y_Dp = deformed_local_to_cartesian(pt_Dp[0], pt_Dp[1], phi_next)
+
+        # Interpolate along the dedendum arc between these two points
+        # Use angular interpolation for smooth arc
+        theta_D = math.atan2(x_D, y_D)
+        theta_Dp = math.atan2(x_Dp, y_Dp)
 
         # Handle wrap-around
         if theta_Dp < theta_D:
             theta_Dp += 2.0 * math.pi
 
-        # Interpolate along the deformed dedendum arc
         for j in range(1, n_ded_arc + 1):
             frac = j / n_ded_arc
             th = theta_D + frac * (theta_Dp - theta_D)
-            # φ for this point on the arc (interpolate between tooth positions)
+            # Interpolate phi for deformation
             phi_arc = phi + frac * (phi_next - phi if phi_next > phi else phi_next + 2*math.pi - phi)
             if phi_arc > 2 * math.pi:
                 phi_arc -= 2 * math.pi
-            # Deformed radius at dedendum (y_loc = ds, which is distance from neutral to dedendum)
+            # Deformed radius at dedendum
             rho_arc = eq14_rho(phi_arc, rm, w0)
-            r_ded = rho_arc + ds  # dedendum is at neutral layer + ds
+            r_ded = rho_arc + ds
             chain_xy.append((r_ded * math.sin(th), r_ded * math.cos(th)))
 
     return {
