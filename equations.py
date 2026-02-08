@@ -1043,8 +1043,7 @@ def build_deformed_flexspline(params: dict, n_ded_arc: int = 8) -> dict:
 
         The tooth point at local (x, y) where y is offset from neutral layer:
           - Radial position: r = ρ + y_loc
-          - Angular position: θ = x_loc / rp + φ (adjusted for curvature)
-          - Rotation: the entire tooth rotates by μ due to bending
+          - Angular position: θ = x_loc / rp + φ + μ
         """
         # Deformed neutral layer radius at this angle
         rho = eq14_rho(phi, rm, w0)
@@ -1055,13 +1054,8 @@ def build_deformed_flexspline(params: dict, n_ded_arc: int = 8) -> dict:
         # Radial position of the point (offset from deformed neutral layer)
         r = rho + y_loc
 
-        # Base angular position of the point
-        # The x_loc is arc length along the tooth, convert to angle
-        theta_base = x_loc / rp + phi
-
-        # Apply the tangent rotation μ
-        # The tooth rotates about its center by μ
-        theta = theta_base + mu * (y_loc / rm)  # rotation scaled by radial offset
+        # Angular position: base angle + bending rotation applied uniformly
+        theta = x_loc / rp + phi + mu
 
         # Convert to Cartesian
         X = r * math.sin(theta)
