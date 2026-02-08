@@ -1092,6 +1092,102 @@ def build_deformed_flexspline(params: dict, n_ded_arc: int = 8) -> dict:
     }
 
 
+def build_modified_deformed_flexspline(params: dict, d_max: float, n_ded_arc: int = 8) -> dict:
+    """Pattern the flexspline around the DEFORMED neutral layer with radial modification.
+
+    This is the same as build_deformed_flexspline, but with the tooth profile
+    shifted inward by d_max on both flanks (Section 3.2 radial modification).
+
+    The modification shifts both sides of the tooth profile inward by d_max
+    in the X-direction:
+      - Right flank (x > 0): x_new = x - d_max
+      - Left flank (x < 0): x_new = x + d_max
+
+    Parameters:
+        params    – gear parameters dict
+        d_max     – maximum interference distance to shift inward (mm)
+        n_ded_arc – number of interpolation points per dedendum arc
+
+    Returns dict with:
+        chain_xy  – list of (X, Y) forming the modified deformed outline
+        d_max     – the applied modification amount
+        rp, rm, w0, ds, ha, hf, z_f – geometry references
+    Or {"error": msg} on failure.
+    """
+    result = compute_profile(params)
+    if "error" in result:
+        return result
+
+    z_f = int(params["z_f"])
+    w0  = params["w0"]
+    rp  = params["m"] * z_f / 2.0
+    rm  = result["rm"]
+    ds  = result["ds"]
+
+    # Single tooth flanks in local coords - MODIFIED by d_max
+    right_flank_orig = list(result["pts_AB"]) + list(result["pts_BC"]) + list(result["pts_CD"])
+
+    # Apply radial modification: shift right flank inward (subtract d_max from x)
+    right_flank = [(x - d_max, y) for x, y in right_flank_orig]
+
+    # Left flank: mirror of modified right flank
+    left_flank = [(-x, y) for x, y in reversed(right_flank)]
+
+    # Angular pitch
+    pitch_angle = 2.0 * math.pi / z_f
+
+    def tooth_point_global(xr, yr, phi):
+        """Transform local tooth point to global using paper's Eq 29."""
+        rho  = eq14_rho(phi, rm, w0)
+        mu   = eq21_mu(phi, w0, rm)
+        phi1 = eq23_phi1(phi, w0, rm)
+        gamma = phi1
+        psi   = eq27_psi(mu, gamma)
+        return eq29_transform(xr, yr, psi, rho, gamma)
+
+    chain_xy = []
+
+    pt_D  = right_flank[-1]
+    pt_Dp = left_flank[0]
+
+    for i in range(z_f):
+        phi      = i * pitch_angle
+        next_i   = (i + 1) % z_f
+        phi_next = next_i * pitch_angle
+
+        # Left flank
+        for xr, yr in left_flank:
+            chain_xy.append(tooth_point_global(xr, yr, phi))
+
+        # Right flank
+        for xr, yr in right_flank:
+            chain_xy.append(tooth_point_global(xr, yr, phi))
+
+        # Dedendum arc
+        xD,  yD  = tooth_point_global(pt_D[0],  pt_D[1],  phi)
+        xDp, yDp = tooth_point_global(pt_Dp[0], pt_Dp[1], phi_next)
+
+        for j in range(1, n_ded_arc + 1):
+            frac = j / n_ded_arc
+            x_arc = xD + frac * (xDp - xD)
+            y_arc = yD + frac * (yDp - yD)
+            chain_xy.append((x_arc, y_arc))
+
+    return {
+        "chain_xy": chain_xy,
+        "d_max": d_max,
+        "rp": rp,
+        "rm": rm,
+        "w0": w0,
+        "ds": ds,
+        "s": result["s"],
+        "t": result["t"],
+        "ha": params["ha"],
+        "hf": params["hf"],
+        "z_f": z_f,
+    }
+
+
 def build_full_circular_spline(params: dict,
                                 smoothed_flank: list[tuple[float, float]],
                                 rp_c: float,

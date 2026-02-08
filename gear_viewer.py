@@ -28,7 +28,7 @@ from equations import (DEFAULTS, PARAM_LABELS, PARAM_ORDER, PITCH_RADIUS,
                        compute_profile, compute_conjugate_profile,
                        smooth_conjugate_profile, build_full_flexspline,
                        build_deformed_flexspline, build_full_circular_spline,
-                       eq14_rho)
+                       build_modified_deformed_flexspline, eq14_rho)
 
 # ── Config directory for saving/loading configurations ────────────
 CONFIG_DIR = os.path.join(os.path.dirname(__file__), "configs")
@@ -1307,13 +1307,19 @@ class TabCircularSpline:
         self._update_info()
 
 
-# ── Tab 5: Overlay — Flexspline + Circular Spline ────────────────
+# ── Tab 5: Radial Modification Method ─────────────────────────────
 
 class TabOverlay:
-    """Overlay of both flexspline and circular spline on one view."""
+    """Radial Modification Method — Section 3.2 of the paper.
 
-    CLR_FLEX = "#2266cc"   # blue for flexspline
-    CLR_CIRC = "#cc3333"   # red for circular spline
+    Overlays deformed flexspline and circular spline, detects interference,
+    calculates d_max, and applies radial modification to the flexspline.
+    """
+
+    CLR_FLEX = "#2266cc"       # blue for original flexspline
+    CLR_FLEX_MOD = "#00cccc"   # cyan for modified flexspline
+    CLR_CIRC = "#cc3333"       # red for circular spline
+    CLR_INTERFERENCE = "#ffcc00"  # yellow for interference points
 
     def __init__(self, parent: ttk.Frame,
                  shared_vars: dict[str, tk.StringVar],
@@ -1326,7 +1332,7 @@ class TabOverlay:
         left = ttk.Frame(parent, padding=10)
         left.pack(side=tk.LEFT, fill=tk.Y)
 
-        ttk.Label(left, text="Overlay View",
+        ttk.Label(left, text="Radial Modification Method",
                   font=("Consolas", 10, "bold")).grid(
             row=0, column=0, columnspan=2, pady=(0, 8))
 
@@ -1348,26 +1354,51 @@ class TabOverlay:
                   font=("Consolas", 9)).grid(row=row, column=1, pady=2)
         row += 1
 
+        # Button frame
         btn_frame = ttk.Frame(left)
         btn_frame.grid(row=row, column=0, columnspan=2, pady=10)
-        ttk.Button(btn_frame, text="Update", command=self.redraw).pack(
+        ttk.Button(btn_frame, text="Update", command=self._reset_and_redraw).pack(
             side=tk.LEFT, padx=(0, 6))
         self._zoomed = False
         self._zoom_btn = ttk.Button(btn_frame, text="Zoom In",
                                     command=self._toggle_zoom)
-        self._zoom_btn.pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(btn_frame, text="Export Wave Gen",
-                   command=self._export_wave_gen).pack(side=tk.LEFT)
+        self._zoom_btn.pack(side=tk.LEFT)
         row += 1
 
         # Deformed flexspline toggle button
-        self._deformed = False
-        self._deform_btn = ttk.Button(left, text="Show Deformed Flex",
+        self._deformed = True  # Default to deformed for radial modification
+        self._deform_btn = ttk.Button(left, text="Show Undeformed Flex",
                                       command=self._toggle_deformed)
         self._deform_btn.grid(row=row, column=0, columnspan=2, pady=(0, 6))
         row += 1
 
+        # Calculate Radial Modification button
+        self._calc_btn = ttk.Button(left, text="Calculate Radial Modification",
+                                    command=self._calculate_radial_modification)
+        self._calc_btn.grid(row=row, column=0, columnspan=2, pady=(0, 6))
+        row += 1
+
+        # Export buttons frame
+        export_frame = ttk.Frame(left)
+        export_frame.grid(row=row, column=0, columnspan=2, pady=(0, 6))
+        self._export_mod_btn = ttk.Button(export_frame, text="Export Modified",
+                                          command=self._export_modified_flexspline,
+                                          state=tk.DISABLED)
+        self._export_mod_btn.pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(export_frame, text="Export Wave Gen",
+                   command=self._export_wave_gen).pack(side=tk.LEFT)
+        row += 1
+
         # Legend
+        ttk.Separator(left, orient="horizontal").grid(
+            row=row, column=0, columnspan=2, sticky="ew", pady=6)
+        row += 1
+
+        ttk.Label(left, text="Legend",
+                  font=("Consolas", 9, "bold")).grid(
+            row=row, column=0, columnspan=2, sticky="w")
+        row += 1
+
         legend = ttk.Frame(left)
         legend.grid(row=row, column=0, columnspan=2, sticky="w", pady=(0, 4))
         tk.Canvas(legend, width=14, height=14, bg=self.CLR_FLEX,
@@ -1380,23 +1411,26 @@ class TabOverlay:
                   font=("Consolas", 8)).pack(side=tk.LEFT)
         row += 1
 
-        # Output category dropdown
+        legend2 = ttk.Frame(left)
+        legend2.grid(row=row, column=0, columnspan=2, sticky="w", pady=(0, 4))
+        tk.Canvas(legend2, width=14, height=14, bg=self.CLR_FLEX_MOD,
+                  highlightthickness=0).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Label(legend2, text="Modified Flex",
+                  font=("Consolas", 8)).pack(side=tk.LEFT, padx=(0, 10))
+        tk.Canvas(legend2, width=14, height=14, bg=self.CLR_INTERFERENCE,
+                  highlightthickness=0).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Label(legend2, text="Interference",
+                  font=("Consolas", 8)).pack(side=tk.LEFT)
+        row += 1
+
+        # Status/info area
         ttk.Separator(left, orient="horizontal").grid(
             row=row, column=0, columnspan=2, sticky="ew", pady=6)
         row += 1
 
-        ttk.Label(left, text="Output Category",
+        ttk.Label(left, text="Status",
                   font=("Consolas", 9, "bold")).grid(
             row=row, column=0, columnspan=2, sticky="w")
-        row += 1
-
-        self.category_var = tk.StringVar(value=list(OUTPUT_CATEGORIES_OVERLAY.keys())[0])
-        self.category_combo = ttk.Combobox(
-            left, textvariable=self.category_var,
-            values=list(OUTPUT_CATEGORIES_OVERLAY.keys()),
-            state="readonly", width=18, font=("Consolas", 9))
-        self.category_combo.grid(row=row, column=0, columnspan=2, pady=4, sticky="w")
-        self.category_combo.bind("<<ComboboxSelected>>", lambda e: self._update_info())
         row += 1
 
         self.info_var = tk.StringVar(value="Click Update to compute.")
@@ -1404,10 +1438,15 @@ class TabOverlay:
                   foreground="grey30", wraplength=200, justify="left").grid(
             row=row, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
+        # State variables
         self._last_conj = None
         self._last_params_key = None
         self._last_fs = None
         self._last_cs = None
+        self._d_max = None
+        self._modified_fs = None
+        self._interference_pts = []
+        self._modification_applied = False
 
         # Right: canvas
         self.canvas = tk.Canvas(parent, bg="white")
@@ -1423,7 +1462,253 @@ class TabOverlay:
     def _toggle_deformed(self):
         self._deformed = not self._deformed
         self._deform_btn.config(text="Show Undeformed Flex" if self._deformed else "Show Deformed Flex")
+        self._reset_and_redraw()
+
+    def _reset_and_redraw(self):
+        """Reset modification state and redraw with fresh data."""
+        self._d_max = None
+        self._modified_fs = None
+        self._interference_pts = []
+        self._modification_applied = False
+        self._export_mod_btn.config(state=tk.DISABLED)
+        # Clear cached data to force recompute
+        self._last_conj = None
+        self._last_params_key = None
         self.redraw()
+
+    def _read_params(self) -> dict | None:
+        params = {}
+        for key, var in self.entries.items():
+            try:
+                params[key] = float(var.get())
+            except ValueError:
+                self.info_var.set(f"Invalid number for {key}")
+                return None
+        return params
+
+    def _detect_interference(self, fs_chain: list, cs_chain: list,
+                             fs: dict, cs: dict) -> list:
+        """Detect interference points between flexspline and circular spline.
+
+        Focus on the engagement zone (around theta=0, top of gears).
+        Returns list of (x, y, penetration_distance) for interference points.
+        """
+        interference = []
+
+        # Get radii for reference
+        rp_f = fs["rp"]
+        rp_c = cs["rp_c"]
+        r_ded_fs = fs["rm"] + fs["ds"]  # flexspline dedendum radius
+        r_add_cs = cs["r_add"]          # circular spline addendum radius
+
+        # Build a simple polygon test for the flexspline
+        # Focus on teeth near theta=0 (engagement zone)
+        z_f = fs["z_f"]
+        pitch_angle = 2.0 * math.pi / z_f
+
+        # Sample circular spline points in the tooth tip region
+        # Look for points where CS addendum penetrates into FS dedendum region
+        for i, (x_cs, y_cs) in enumerate(cs_chain):
+            # Only check points near the top (engagement zone)
+            # theta = atan2(x, y), we want theta near 0
+            theta = math.atan2(x_cs, y_cs)
+            if abs(theta) > pitch_angle * 3:  # Check ~3 teeth around theta=0
+                continue
+
+            # Check if this is a tooth tip point (high radius)
+            r_cs = math.sqrt(x_cs**2 + y_cs**2)
+            if r_cs < rp_c:  # Only care about addendum region
+                continue
+
+            # Find nearest flexspline point
+            min_dist = float('inf')
+            nearest_fs = None
+            for x_fs, y_fs in fs_chain:
+                # Only check nearby flexspline points
+                theta_fs = math.atan2(x_fs, y_fs)
+                if abs(theta_fs - theta) > pitch_angle:
+                    continue
+
+                dist = math.sqrt((x_cs - x_fs)**2 + (y_cs - y_fs)**2)
+                if dist < min_dist:
+                    min_dist = dist
+                    nearest_fs = (x_fs, y_fs)
+
+            if nearest_fs is None:
+                continue
+
+            # Check for interference: CS point is inside FS (radially)
+            r_fs_nearest = math.sqrt(nearest_fs[0]**2 + nearest_fs[1]**2)
+
+            # Interference occurs when CS addendum penetrates FS dedendum
+            # This happens when CS point is at higher radius than FS profile at same angle
+            # We measure the X-direction penetration for d_max calculation
+
+            # Find FS points at similar Y (radial position) to measure X penetration
+            for x_fs, y_fs in fs_chain:
+                # Check if at similar Y position
+                if abs(y_fs - y_cs) > 0.05:  # tolerance
+                    continue
+
+                # Check if CS is "inside" FS in X direction
+                # Interference: |x_cs| < |x_fs| at same Y level
+                # But also need to be on the same side
+                if x_cs > 0 and x_fs > 0:
+                    if x_cs < x_fs:  # CS is inside FS (interference)
+                        penetration = x_fs - x_cs
+                        interference.append((x_cs, y_cs, penetration))
+                        break
+                elif x_cs < 0 and x_fs < 0:
+                    if x_cs > x_fs:  # CS is inside FS (interference)
+                        penetration = x_cs - x_fs
+                        interference.append((x_cs, y_cs, penetration))
+                        break
+
+        return interference
+
+    def _calculate_d_max(self, interference: list) -> float:
+        """Calculate maximum penetration distance from interference points."""
+        if not interference:
+            return 0.0
+        return max(p[2] for p in interference)
+
+    def _calculate_radial_modification(self):
+        """Main workflow for calculating and applying radial modification."""
+        params = self._read_params()
+        if params is None:
+            return
+
+        try:
+            s_val = float(self.smooth_var.get())
+        except ValueError:
+            self.info_var.set("Invalid smoothing value")
+            return
+
+        # Step 1: Build deformed flexspline
+        self.info_var.set("Step 1/5: Building deformed flexspline...")
+        self.frame.update_idletasks()
+
+        fs = build_deformed_flexspline(params)
+        if "error" in fs:
+            self.info_var.set(f"Error: {fs['error']}")
+            return
+        self._last_fs = fs
+
+        # Step 2: Build circular spline
+        self.info_var.set("Step 2/5: Building circular spline...")
+        self.frame.update_idletasks()
+
+        params_key = (tuple(sorted(params.items())), s_val)
+        if self._last_conj is None or self._last_params_key != params_key:
+            conj = compute_conjugate_profile(params)
+            if "error" in conj:
+                self.info_var.set(f"Error: {conj['error']}")
+                return
+            smooth_conjugate_profile(conj, s=s_val)
+            self._last_conj = conj
+            self._last_params_key = params_key
+        else:
+            conj = self._last_conj
+
+        flank = conj.get("smoothed_flank", [])
+        rp_c = conj["rp_c"]
+        cs = build_full_circular_spline(params, flank, rp_c)
+        if "error" in cs:
+            self.info_var.set(f"Error: {cs['error']}")
+            return
+        self._last_cs = cs
+
+        # Step 3: Detect interference
+        self.info_var.set("Step 3/5: Detecting interference zones...")
+        self.frame.update_idletasks()
+
+        interference = self._detect_interference(fs["chain_xy"], cs["chain_xy"], fs, cs)
+        self._interference_pts = [(p[0], p[1]) for p in interference]
+
+        # Step 4: Calculate d_max
+        self.info_var.set("Step 4/5: Calculating d_max...")
+        self.frame.update_idletasks()
+
+        d_max = self._calculate_d_max(interference)
+        self._d_max = d_max
+
+        if d_max <= 0:
+            self.info_var.set(
+                f"Step 4/5: d_max = 0.0000 mm\n"
+                f"No interference detected.\n"
+                f"Profiles are already compatible."
+            )
+            self._modification_applied = False
+            self._modified_fs = None
+            self._export_mod_btn.config(state=tk.DISABLED)
+            self.redraw()
+            return
+
+        # Step 5: Apply modification
+        self.info_var.set(f"Step 5/5: Applying d_max = {d_max:.4f} mm...")
+        self.frame.update_idletasks()
+
+        modified_fs = build_modified_deformed_flexspline(params, d_max)
+        if "error" in modified_fs:
+            self.info_var.set(f"Error: {modified_fs['error']}")
+            return
+
+        self._modified_fs = modified_fs
+        self._modification_applied = True
+        self._export_mod_btn.config(state=tk.NORMAL)
+
+        # Final status
+        self.info_var.set(
+            f"Radial modification complete.\n\n"
+            f"Interference points: {len(interference)}\n"
+            f"d_max = {d_max:.4f} mm\n\n"
+            f"Modified flexspline ready\n"
+            f"for export."
+        )
+
+        self.redraw()
+
+    def _export_modified_flexspline(self):
+        """Export the radially modified flexspline as .sldcrv."""
+        if self._modified_fs is None:
+            self.info_var.set("No modified data. Calculate first.")
+            return
+
+        path = filedialog.asksaveasfilename(
+            defaultextension=".sldcrv",
+            filetypes=[("SolidWorks Curve", "*.sldcrv"), ("All files", "*.*")],
+            initialfile=f"flexspline_modified_dmax{self._d_max:.4f}.sldcrv",
+        )
+        if not path:
+            return
+
+        chain = self._modified_fs["chain_xy"]
+
+        # Filter duplicates
+        min_dist = 1e-9
+        filtered = []
+        removed = 0
+        for x, y in chain:
+            if not filtered:
+                filtered.append((x, y))
+            else:
+                dx = x - filtered[-1][0]
+                dy = y - filtered[-1][1]
+                if dx*dx + dy*dy > min_dist * min_dist:
+                    filtered.append((x, y))
+                else:
+                    removed += 1
+
+        with open(path, "w") as f:
+            for x, y in filtered:
+                f.write(f"{x:.6f},{y:.6f},0\n")
+
+        self.info_var.set(
+            f"Exported {len(filtered)} pts\n"
+            f"d_max = {self._d_max:.4f} mm\n"
+            f"({removed} duplicates removed)\n"
+            f"-> {os.path.basename(path)}"
+        )
 
     def _export_wave_gen(self):
         """Export deformed inner wall (wave generator profile) as .sldcrv."""
@@ -1438,8 +1723,6 @@ class TabOverlay:
         rm = self._last_fs["rm"]
         t = self._last_fs["t"]
         w0 = params["w0"]
-
-        # Inner wall radius = neutral layer minus half cup wall thickness
         r_inner = rm - t / 2.0
 
         path = filedialog.asksaveasfilename(
@@ -1450,7 +1733,6 @@ class TabOverlay:
         if not path:
             return
 
-        # Generate points along deformed inner wall: ρ = (rm - t/2) + w0·cos(2φ)
         n_pts = 360
         points = []
         for i in range(n_pts + 1):
@@ -1466,38 +1748,6 @@ class TabOverlay:
 
         self.info_var.set(f"Exported {len(points)} pts\n-> {os.path.basename(path)}")
 
-    def _read_params(self) -> dict | None:
-        params = {}
-        for key, var in self.entries.items():
-            try:
-                params[key] = float(var.get())
-            except ValueError:
-                self.info_var.set(f"Invalid number for {key}")
-                return None
-        return params
-
-    def _update_info(self):
-        """Update the info display based on selected category."""
-        if self._last_fs is None or self._last_cs is None:
-            return
-
-        fs = self._last_fs
-        cs = self._last_cs
-        category = self.category_var.get()
-
-        if category == "Wall Thickness":
-            self.info_var.set(
-                f"s = {fs['s']:.4f} mm\n"
-                f"t = {fs['t']:.4f} mm")
-        elif category == "Flexspline":
-            self.info_var.set(
-                f"z_f = {fs['z_f']} teeth\n"
-                f"rp = {fs['rp']:.4f} mm")
-        elif category == "Circular Spline":
-            self.info_var.set(
-                f"z_c = {cs['z_c']} teeth\n"
-                f"rp_c = {cs['rp_c']:.4f} mm")
-
     def redraw(self):
         c = self.canvas
         c.delete("all")
@@ -1512,7 +1762,7 @@ class TabOverlay:
             self.info_var.set("Invalid smoothing value")
             return
 
-        # ── Build flexspline chain ──
+        # Build flexspline (deformed or undeformed based on toggle)
         if self._deformed:
             fs = build_deformed_flexspline(params)
         else:
@@ -1522,7 +1772,7 @@ class TabOverlay:
             self._last_fs = None
             return
 
-        # ── Build circular spline chain (with cached conjugate) ──
+        # Build circular spline (with cached conjugate)
         params_key = (tuple(sorted(params.items())), s_val)
         if self._last_conj is None or self._last_params_key != params_key:
             self.info_var.set("Computing conjugate profile...")
@@ -1548,28 +1798,23 @@ class TabOverlay:
 
         rp_f = fs["rp"]
         rp_cs = cs["rp_c"]
-
-        # Use the larger pitch radius for the viewport
         rp_max = max(rp_f, rp_cs)
 
         plot_px = _canvas_plot_px(c)
         margin = MARGIN
 
         if self._zoomed:
-            # ~4 teeth (use flexspline tooth count for angular pitch)
             z_f = fs["z_f"]
             n_show = 4
             arc_span = n_show * 2.0 * math.pi / z_f
             half_span = arc_span / 2.0
-            # Radial range covers both gears
             r_lo = min(fs["rm"] + fs["ds"], cs["r_ded"])
-            r_hi = max(fs["rm"] + fs["ds"] + fs["hf"] + fs["ha"],
-                       cs["r_add"])
+            r_hi = max(fs["rm"] + fs["ds"] + fs["hf"] + fs["ha"], cs["r_add"])
             pad = (r_hi - r_lo) * 0.3
             r_lo -= pad
             r_hi += pad
             x_min = -rp_max * math.sin(half_span)
-            x_max =  rp_max * math.sin(half_span)
+            x_max = rp_max * math.sin(half_span)
             y_min = r_lo * math.cos(half_span)
             y_max = r_hi
             view_w = x_max - x_min
@@ -1590,11 +1835,10 @@ class TabOverlay:
             return (ox + (x_mm - cx_view) * px_per_mm,
                     oy - (y_mm - cy_view) * px_per_mm)
 
-        # ── Axes ──
+        # Draw axes
         ax_y_px = oy - (0 - cy_view) * px_per_mm
         if 0 <= ax_y_px <= plot_px:
-            c.create_line(margin, ax_y_px, margin + plot_px, ax_y_px,
-                          fill="grey70")
+            c.create_line(margin, ax_y_px, margin + plot_px, ax_y_px, fill="grey70")
         ax_x_px = ox + (0 - cx_view) * px_per_mm
         if margin <= ax_x_px <= margin + plot_px:
             c.create_line(ax_x_px, 0, ax_x_px, plot_px, fill="grey70")
@@ -1609,21 +1853,18 @@ class TabOverlay:
         while v <= cx_view + half_view + 1e-9:
             px_t, _ = to_px(v, 0)
             if margin <= px_t <= margin + plot_px and 0 <= ax_y_px <= plot_px:
-                c.create_line(px_t, ax_y_px - 3, px_t, ax_y_px + 3,
-                              fill="grey70")
-                c.create_text(px_t, ax_y_px + 14,
-                              text=tick_fmt.format(v), font=("Consolas", 7))
+                c.create_line(px_t, ax_y_px - 3, px_t, ax_y_px + 3, fill="grey70")
+                c.create_text(px_t, ax_y_px + 14, text=tick_fmt.format(v),
+                              font=("Consolas", 7))
             v += tick_step
 
         v = math.floor((cy_view - half_view) / tick_step) * tick_step
         while v <= cy_view + half_view + 1e-9:
             _, py_t = to_px(0, v)
             if 0 <= py_t <= plot_px and margin <= ax_x_px <= margin + plot_px:
-                c.create_line(ax_x_px - 3, py_t, ax_x_px + 3, py_t,
-                              fill="grey70")
-                c.create_text(ax_x_px - 22, py_t,
-                              text=tick_fmt.format(v), font=("Consolas", 7),
-                              anchor="e")
+                c.create_line(ax_x_px - 3, py_t, ax_x_px + 3, py_t, fill="grey70")
+                c.create_text(ax_x_px - 22, py_t, text=tick_fmt.format(v),
+                              font=("Consolas", 7), anchor="e")
             v += tick_step
 
         c.create_text(margin + plot_px / 2, plot_px + 30,
@@ -1631,21 +1872,56 @@ class TabOverlay:
         c.create_text(14, plot_px / 2, text="Y\n(mm)",
                       font=("Consolas", 9, "bold"))
 
-        # ── Draw both gear outlines ──
-        for chain, color in [
-            (fs["chain_xy"], self.CLR_FLEX),
-            (cs["chain_xy"], self.CLR_CIRC),
-        ]:
+        # Draw original flexspline (dashed if modified exists)
+        if len(fs["chain_xy"]) >= 2:
+            coords = []
+            for X, Y in fs["chain_xy"]:
+                px, py = to_px(X, Y)
+                coords.extend([px, py])
+            if self._modification_applied and self._modified_fs:
+                # Draw original as dashed when modification is applied
+                c.create_line(*coords, fill=self.CLR_FLEX, width=1, dash=(4, 4))
+            else:
+                c.create_line(*coords, fill=self.CLR_FLEX, width=2)
+
+        # Draw circular spline
+        if len(cs["chain_xy"]) >= 2:
+            coords = []
+            for X, Y in cs["chain_xy"]:
+                px, py = to_px(X, Y)
+                coords.extend([px, py])
+            c.create_line(*coords, fill=self.CLR_CIRC, width=2)
+
+        # Draw modified flexspline if calculated
+        if self._modification_applied and self._modified_fs:
+            chain = self._modified_fs["chain_xy"]
             if len(chain) >= 2:
                 coords = []
                 for X, Y in chain:
                     px, py = to_px(X, Y)
                     coords.extend([px, py])
-                c.create_line(*coords, fill=color, width=2, smooth=False)
+                c.create_line(*coords, fill=self.CLR_FLEX_MOD, width=2)
+
+        # Draw interference points
+        if self._interference_pts:
+            for x, y in self._interference_pts:
+                px, py = to_px(x, y)
+                r = 3
+                c.create_oval(px - r, py - r, px + r, py + r,
+                              fill=self.CLR_INTERFERENCE, outline="")
 
         self._last_fs = fs
         self._last_cs = cs
-        self._update_info()
+
+        # Update info if not in modification workflow
+        if not self._modification_applied:
+            self.info_var.set(
+                f"Deformed flexspline + circular\n"
+                f"spline overlay.\n\n"
+                f"Click 'Calculate Radial\n"
+                f"Modification' to detect\n"
+                f"interference and compute d_max."
+            )
 
 
 # ── Main App ───────────────────────────────────────────────────────
@@ -1678,7 +1954,7 @@ class App:
         notebook.add(tab2_frame, text=" 2.2 Conjugate Circular Spline Tooth ")
         notebook.add(tab3_frame, text=" 2.3 Flexspline ")
         notebook.add(tab4_frame, text=" 2.4 Circular Spline ")
-        notebook.add(tab5_frame, text=" 2.5 Overlay ")
+        notebook.add(tab5_frame, text=" 2.5 Radial Modification ")
 
         # Shared parameter variables across all tabs
         self.shared_vars = {key: tk.StringVar(value=str(DEFAULTS[key]))
