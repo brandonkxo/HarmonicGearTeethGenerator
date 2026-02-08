@@ -5,11 +5,12 @@ Tabbed interface:
   Tab 2.2 — Conjugate circular spline tooth profile (placeholder)
 """
 import ctypes
+import json
 import math
 import os
 import sys
 import tkinter as tk
-from tkinter import ttk, filedialog
+from tkinter import ttk, filedialog, simpledialog, messagebox
 
 # ── Windows high-DPI fix ──────────────────────────────────────────
 # Tell Windows this process is DPI-aware so it renders at native
@@ -28,6 +29,10 @@ from equations import (DEFAULTS, PARAM_LABELS, PARAM_ORDER, PITCH_RADIUS,
                        smooth_conjugate_profile, build_full_flexspline,
                        build_deformed_flexspline, build_full_circular_spline,
                        eq14_rho)
+
+# ── Config directory for saving/loading configurations ────────────
+CONFIG_DIR = os.path.join(os.path.dirname(__file__), "configs")
+os.makedirs(CONFIG_DIR, exist_ok=True)
 
 # ── Viewport settings ──────────────────────────────────────────────
 HALF_VIEW_MM = 1.5
@@ -1651,6 +1656,15 @@ class App:
         root.title("Harmonic Drive — DCT Tooth Calculator")
         root.resizable(True, True)
 
+        # ── Menu bar ──
+        menubar = tk.Menu(root)
+        root.config(menu=menubar)
+
+        file_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="File", menu=file_menu)
+        file_menu.add_command(label="Save Config...", command=self.save_config)
+        file_menu.add_command(label="Load Config...", command=self.load_config)
+
         notebook = ttk.Notebook(root)
         notebook.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
 
@@ -1667,15 +1681,131 @@ class App:
         notebook.add(tab5_frame, text=" 2.5 Overlay ")
 
         # Shared parameter variables across all tabs
-        shared_vars = {key: tk.StringVar(value=str(DEFAULTS[key]))
-                       for key in PARAM_ORDER}
-        smooth_var = tk.StringVar(value="0.001")
+        self.shared_vars = {key: tk.StringVar(value=str(DEFAULTS[key]))
+                           for key in PARAM_ORDER}
+        self.smooth_var = tk.StringVar(value="0.001")
 
-        self.tab21 = Tab21(tab1_frame, shared_vars)
-        self.tab22 = Tab22(tab2_frame, shared_vars, smooth_var)
-        self.tab_fs = TabFlexspline(tab3_frame, shared_vars)
-        self.tab_cs = TabCircularSpline(tab4_frame, shared_vars, smooth_var)
-        self.tab_ov = TabOverlay(tab5_frame, shared_vars, smooth_var)
+        self.tab21 = Tab21(tab1_frame, self.shared_vars)
+        self.tab22 = Tab22(tab2_frame, self.shared_vars, self.smooth_var)
+        self.tab_fs = TabFlexspline(tab3_frame, self.shared_vars)
+        self.tab_cs = TabCircularSpline(tab4_frame, self.shared_vars, self.smooth_var)
+        self.tab_ov = TabOverlay(tab5_frame, self.shared_vars, self.smooth_var)
+
+    def save_config(self):
+        """Save current parameters to a named JSON config file."""
+        name = simpledialog.askstring(
+            "Save Configuration",
+            "Enter configuration name:",
+            parent=self.root
+        )
+        if not name:
+            return
+
+        # Sanitize filename (remove invalid characters)
+        safe_name = "".join(c for c in name if c.isalnum() or c in " _-").strip()
+        if not safe_name:
+            messagebox.showerror("Error", "Invalid configuration name.")
+            return
+
+        # Collect current parameter values
+        params = {}
+        for key in PARAM_ORDER:
+            try:
+                params[key] = float(self.shared_vars[key].get())
+            except ValueError:
+                params[key] = self.shared_vars[key].get()
+
+        try:
+            smooth = float(self.smooth_var.get())
+        except ValueError:
+            smooth = self.smooth_var.get()
+
+        config_data = {
+            "name": name,
+            "params": params,
+            "smooth": smooth
+        }
+
+        filepath = os.path.join(CONFIG_DIR, f"{safe_name}.json")
+        try:
+            with open(filepath, "w") as f:
+                json.dump(config_data, f, indent=2)
+            messagebox.showinfo("Saved", f"Configuration saved to:\n{safe_name}.json")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save configuration:\n{e}")
+
+    def load_config(self):
+        """Load parameters from a saved JSON config file."""
+        # List available config files
+        try:
+            files = [f for f in os.listdir(CONFIG_DIR) if f.endswith(".json")]
+        except Exception:
+            files = []
+
+        if not files:
+            messagebox.showinfo("No Configs", "No saved configurations found.")
+            return
+
+        # Create a selection dialog
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Load Configuration")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        ttk.Label(dialog, text="Select a configuration:",
+                  font=("Consolas", 10)).pack(padx=10, pady=(10, 5))
+
+        listbox = tk.Listbox(dialog, font=("Consolas", 9), width=40, height=10)
+        listbox.pack(padx=10, pady=5, fill=tk.BOTH, expand=True)
+
+        for f in sorted(files):
+            listbox.insert(tk.END, f[:-5])  # Remove .json extension
+
+        selected_file = [None]
+
+        def on_load():
+            sel = listbox.curselection()
+            if sel:
+                selected_file[0] = files[sel[0]] if sel[0] < len(files) else sorted(files)[sel[0]]
+                # Find the actual filename from sorted list
+                selected_file[0] = sorted(files)[sel[0]]
+            dialog.destroy()
+
+        def on_cancel():
+            dialog.destroy()
+
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=10)
+        ttk.Button(btn_frame, text="Load", command=on_load).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=on_cancel).pack(side=tk.LEFT, padx=5)
+
+        # Double-click to load
+        listbox.bind("<Double-1>", lambda e: on_load())
+
+        dialog.wait_window()
+
+        if not selected_file[0]:
+            return
+
+        filepath = os.path.join(CONFIG_DIR, selected_file[0])
+        try:
+            with open(filepath, "r") as f:
+                config_data = json.load(f)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load configuration:\n{e}")
+            return
+
+        # Apply loaded values
+        params = config_data.get("params", {})
+        for key in PARAM_ORDER:
+            if key in params:
+                self.shared_vars[key].set(str(params[key]))
+
+        smooth = config_data.get("smooth", 0.001)
+        self.smooth_var.set(str(smooth))
+
+        config_name = config_data.get("name", selected_file[0][:-5])
+        messagebox.showinfo("Loaded", f"Configuration '{config_name}' loaded.")
 
 
 def main():
