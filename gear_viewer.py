@@ -1355,6 +1355,13 @@ class TabOverlay:
                    command=self._export_wave_gen).pack(side=tk.LEFT)
         row += 1
 
+        # Deformed flexspline toggle button
+        self._deformed = False
+        self._deform_btn = ttk.Button(left, text="Show Deformed Flex",
+                                      command=self._toggle_deformed)
+        self._deform_btn.grid(row=row, column=0, columnspan=2, pady=(0, 6))
+        row += 1
+
         # Legend
         legend = ttk.Frame(left)
         legend.grid(row=row, column=0, columnspan=2, sticky="w", pady=(0, 4))
@@ -1406,6 +1413,11 @@ class TabOverlay:
     def _toggle_zoom(self):
         self._zoomed = not self._zoomed
         self._zoom_btn.config(text="Zoom Out" if self._zoomed else "Zoom In")
+        self.redraw()
+
+    def _toggle_deformed(self):
+        self._deformed = not self._deformed
+        self._deform_btn.config(text="Show Undeformed Flex" if self._deformed else "Show Deformed Flex")
         self.redraw()
 
     def _export_wave_gen(self):
@@ -1496,7 +1508,10 @@ class TabOverlay:
             return
 
         # ── Build flexspline chain ──
-        fs = build_full_flexspline(params)
+        if self._deformed:
+            fs = build_deformed_flexspline(params)
+        else:
+            fs = build_full_flexspline(params)
         if "error" in fs:
             self.info_var.set(f"Flexspline error: {fs['error']}")
             self._last_fs = None
