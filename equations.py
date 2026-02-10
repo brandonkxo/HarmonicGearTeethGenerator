@@ -963,8 +963,14 @@ def build_full_flexspline(params: dict, n_ded_arc: int = 8) -> dict:
         for x_loc, y_loc in left_flank:
             chain_xy.append(local_to_polar(x_loc, y_loc, angle_i))
 
-        # Tip line is implicit — last point of left_flank (A') connects
-        # to first point of right_flank (A) in the polyline
+        # Addendum line: A' (last of left_flank) → A (first of right_flank)
+        pt_Ap = left_flank[-1]
+        pt_A = right_flank[0]
+        for j in range(1, n_ded_arc + 1):
+            frac = j / n_ded_arc
+            x_loc = pt_Ap[0] + frac * (pt_A[0] - pt_Ap[0])
+            y_loc = pt_Ap[1] + frac * (pt_A[1] - pt_Ap[1])
+            chain_xy.append(local_to_polar(x_loc, y_loc, angle_i))
 
         # Right flank: A → D (addendum down to dedendum)
         for x_loc, y_loc in right_flank:
@@ -1060,6 +1066,15 @@ def build_deformed_flexspline(params: dict, n_ded_arc: int = 8) -> dict:
         # Left flank: D' → A' (dedendum up to addendum)
         for xr, yr in left_flank:
             chain_xy.append(tooth_point_global(xr, yr, phi))
+
+        # Addendum line: A' (last of left_flank) → A (first of right_flank)
+        pt_Ap = left_flank[-1]
+        pt_A = right_flank[0]
+        for j in range(1, n_ded_arc + 1):
+            frac = j / n_ded_arc
+            x_loc = pt_Ap[0] + frac * (pt_A[0] - pt_Ap[0])
+            y_loc = pt_Ap[1] + frac * (pt_A[1] - pt_Ap[1])
+            chain_xy.append(tooth_point_global(x_loc, y_loc, phi))
 
         # Right flank: A → D (addendum down to dedendum)
         for xr, yr in right_flank:
@@ -1158,6 +1173,15 @@ def build_modified_deformed_flexspline(params: dict, d_max: float, n_ded_arc: in
         # Left flank
         for xr, yr in left_flank:
             chain_xy.append(tooth_point_global(xr, yr, phi))
+
+        # Addendum line: A' (last of left_flank) → A (first of right_flank)
+        pt_Ap = left_flank[-1]
+        pt_A = right_flank[0]
+        for j in range(1, n_ded_arc + 1):
+            frac = j / n_ded_arc
+            x_loc = pt_Ap[0] + frac * (pt_A[0] - pt_Ap[0])
+            y_loc = pt_Ap[1] + frac * (pt_A[1] - pt_Ap[1])
+            chain_xy.append(tooth_point_global(x_loc, y_loc, phi))
 
         # Right flank
         for xr, yr in right_flank:
