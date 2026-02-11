@@ -607,6 +607,12 @@ class TabFlexspline:
         self._deform_btn.grid(row=row, column=0, columnspan=2, pady=(0, 6))
         row += 1
 
+        # Debug single tooth button
+        ttk.Button(left, text="Debug Single Tooth",
+                   command=self._show_debug_tooth).grid(
+            row=row, column=0, columnspan=2, pady=(0, 6))
+        row += 1
+
         self._last_chain = None  # Cache for export
 
         # Output category dropdown
@@ -648,6 +654,166 @@ class TabFlexspline:
         self._deformed = not self._deformed
         self._deform_btn.config(text="Show Undeformed" if self._deformed else "Show Deformed")
         self.redraw()
+
+    def _show_debug_tooth(self):
+        """Open a high-resolution debug window showing a single tooth with labeled segments."""
+        from equations import compute_profile
+
+        params = self._read_params()
+        if params is None:
+            return
+
+        result = compute_profile(params)
+        if "error" in result:
+            self.info_var.set(f"Error: {result['error']}")
+            return
+
+        # Get profile data
+        m = params["m"]
+        z_f = int(params["z_f"])
+        rp = m * z_f / 2.0
+        rm = result["rm"]
+        ds = result["ds"]
+
+        pts_AB = result["pts_AB"]
+        pts_BC = result["pts_BC"]
+        pts_CD = result["pts_CD"]
+
+        # Build flanks
+        right_flank = list(pts_AB) + list(pts_BC) + list(pts_CD)
+        left_flank = [(-x, y) for x, y in reversed(right_flank)]
+
+        # Key points
+        pt_A = right_flank[0]      # top of right flank
+        pt_Ap = left_flank[-1]     # top of left flank
+        pt_D = right_flank[-1]     # bottom of right flank
+        pt_Dp = left_flank[0]      # bottom of left flank
+
+        # Addendum connector (linear interpolation in local XY)
+        n_add = 8
+        addendum_conn = []
+        for j in range(n_add + 1):
+            frac = j / n_add
+            x = pt_Ap[0] + frac * (pt_A[0] - pt_Ap[0])
+            y = pt_Ap[1] + frac * (pt_A[1] - pt_Ap[1])
+            addendum_conn.append((x, y))
+
+        # Dedendum connector (angular arc at r_ded)
+        r_ded = rm + ds
+        theta_D = pt_D[0] / rp
+        theta_Dp = pt_Dp[0] / rp
+        # For single tooth debug, show arc from D to D' (next tooth's D' would be at theta_Dp + pitch)
+        # Just show the local dedendum region
+        n_ded = 8
+        dedendum_conn = []
+        for j in range(n_ded + 1):
+            frac = j / n_ded
+            th = theta_D + frac * (theta_Dp - theta_D)  # Note: theta_Dp < theta_D
+            x_local = th * rp
+            y_local = ds
+            dedendum_conn.append((x_local, y_local))
+
+        # Create debug window
+        win = tk.Toplevel()
+        win.title("Debug: Single Tooth (Local Coords)")
+        win.geometry("800x700")
+
+        canvas = tk.Canvas(win, bg="white", width=780, height=580)
+        canvas.pack(padx=10, pady=10)
+
+        # Info label
+        info_text = (
+            f"Point A (right top): ({pt_A[0]:.4f}, {pt_A[1]:.4f})\n"
+            f"Point A' (left top): ({pt_Ap[0]:.4f}, {pt_Ap[1]:.4f})\n"
+            f"Point D (right bot): ({pt_D[0]:.4f}, {pt_D[1]:.4f})\n"
+            f"Point D' (left bot): ({pt_Dp[0]:.4f}, {pt_Dp[1]:.4f})\n"
+            f"rm = {rm:.4f}, ds = {ds:.4f}, r_ded = {r_ded:.4f}"
+        )
+        info_label = ttk.Label(win, text=info_text, font=("Consolas", 9),
+                               justify="left")
+        info_label.pack(pady=(0, 10))
+
+        # Compute view bounds
+        all_pts = right_flank + left_flank + addendum_conn + dedendum_conn
+        x_vals = [p[0] for p in all_pts]
+        y_vals = [p[1] for p in all_pts]
+        x_min, x_max = min(x_vals), max(x_vals)
+        y_min, y_max = min(y_vals), max(y_vals)
+
+        # Add padding
+        pad_x = (x_max - x_min) * 0.15
+        pad_y = (y_max - y_min) * 0.15
+        x_min -= pad_x
+        x_max += pad_x
+        y_min -= pad_y
+        y_max += pad_y
+
+        # Canvas transform
+        cw, ch = 760, 560
+        margin = 40
+        plot_w = cw - 2 * margin
+        plot_h = ch - 2 * margin
+
+        scale_x = plot_w / (x_max - x_min)
+        scale_y = plot_h / (y_max - y_min)
+        scale = min(scale_x, scale_y)
+
+        cx = margin + plot_w / 2
+        cy = margin + plot_h / 2
+        data_cx = (x_min + x_max) / 2
+        data_cy = (y_min + y_max) / 2
+
+        def to_px(x, y):
+            px = cx + (x - data_cx) * scale
+            py = cy - (y - data_cy) * scale
+            return px, py
+
+        # Draw grid
+        canvas.create_line(margin, cy - (0 - data_cy) * scale,
+                          cw - margin, cy - (0 - data_cy) * scale,
+                          fill="gray80", dash=(2, 2))
+        canvas.create_line(cx - (0 - data_cx) * scale, margin,
+                          cx - (0 - data_cx) * scale, ch - margin,
+                          fill="gray80", dash=(2, 2))
+
+        # Draw segments with different colors
+        def draw_pts(pts, color, label, width=2):
+            if len(pts) < 2:
+                return
+            coords = []
+            for x, y in pts:
+                px, py = to_px(x, y)
+                coords.extend([px, py])
+            canvas.create_line(*coords, fill=color, width=width)
+            # Label at midpoint
+            mid = pts[len(pts) // 2]
+            mpx, mpy = to_px(mid[0], mid[1])
+            canvas.create_text(mpx + 15, mpy, text=label, fill=color,
+                              font=("Consolas", 8), anchor="w")
+
+        # Draw each segment
+        draw_pts(pts_AB, "blue", "AB (convex)", 3)
+        draw_pts(pts_BC, "green", "BC (tangent)", 3)
+        draw_pts(pts_CD, "purple", "CD (concave)", 3)
+        draw_pts([(-x, y) for x, y in reversed(pts_AB)], "blue", "A'B'", 2)
+        draw_pts([(-x, y) for x, y in reversed(pts_BC)], "green", "B'C'", 2)
+        draw_pts([(-x, y) for x, y in reversed(pts_CD)], "purple", "C'D'", 2)
+        draw_pts(addendum_conn, "red", "", 2)
+        draw_pts(dedendum_conn, "orange", "", 2)
+
+        # Draw key points
+        def draw_point(pt, label, color):
+            px, py = to_px(pt[0], pt[1])
+            r = 5
+            canvas.create_oval(px - r, py - r, px + r, py + r,
+                              fill=color, outline="black")
+            canvas.create_text(px + 10, py - 10, text=label,
+                              font=("Consolas", 9, "bold"), fill=color)
+
+        draw_point(pt_A, "", "blue")
+        draw_point(pt_Ap, "'", "blue")
+        draw_point(pt_D, "", "purple")
+        draw_point(pt_Dp, "'", "purple")
 
     def _export_sldcrv(self):
         """Export flexspline curve as SolidWorks .sldcrv file."""
