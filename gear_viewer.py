@@ -716,7 +716,7 @@ class TabFlexspline:
         # Create debug window
         win = tk.Toplevel()
         win.title("Debug: Single Tooth (Local Coords)")
-        win.geometry("800x750")
+        win.geometry("950x750")
 
         # Top frame for controls
         ctrl_frame = ttk.Frame(win)
@@ -859,10 +859,76 @@ class TabFlexspline:
         def toggle_points_only():
             redraw_canvas()
 
+        # Export helper function
+        def export_segment(pts, default_name):
+            """Export a segment's points to .sldcrv file in global coordinates."""
+            import math
+            path = filedialog.asksaveasfilename(
+                defaultextension=".sldcrv",
+                filetypes=[("SolidWorks Curve", "*.sldcrv"), ("All files", "*.*")],
+                initialfile=default_name,
+            )
+            if not path:
+                return
+
+            # Convert local coords to global Cartesian coords
+            # Local: x_local = theta * rp, y_local = r - rm
+            # Global: X = r * sin(theta), Y = r * cos(theta)
+            global_pts = []
+            for x_local, y_local in pts:
+                theta = x_local / rp
+                r = y_local + rm
+                X = r * math.sin(theta)
+                Y = r * math.cos(theta)
+                global_pts.append((X, Y))
+
+            # Filter duplicate consecutive points (same as main export)
+            min_dist = 1e-9
+            filtered = []
+            for x, y in global_pts:
+                if not filtered:
+                    filtered.append((x, y))
+                else:
+                    dx = x - filtered[-1][0]
+                    dy = y - filtered[-1][1]
+                    dist_sq = dx*dx + dy*dy
+                    if dist_sq > min_dist * min_dist:
+                        filtered.append((x, y))
+
+            with open(path, "w") as f:
+                for x, y in filtered:
+                    f.write(f"{x:.6f},{y:.6f},0\n")
+
+        # Export button callbacks
+        def export_right_flank():
+            export_segment(right_flank, "right_flank.sldcrv")
+
+        def export_left_flank():
+            export_segment(left_flank, "left_flank.sldcrv")
+
+        def export_addendum():
+            export_segment(addendum_conn, "addendum.sldcrv")
+
+        def export_dedendum():
+            export_segment(dedendum_conn, "dedendum.sldcrv")
+
         # Add the Show Points Only button
         ttk.Checkbutton(ctrl_frame, text="Show Points Only",
                         variable=points_only_var,
                         command=toggle_points_only).pack(side="left", padx=5)
+
+        # Add separator
+        ttk.Separator(ctrl_frame, orient="vertical").pack(side="left", padx=10, fill="y")
+
+        # Add export buttons
+        ttk.Button(ctrl_frame, text="Export Right Flank",
+                   command=export_right_flank).pack(side="left", padx=2)
+        ttk.Button(ctrl_frame, text="Export Left Flank",
+                   command=export_left_flank).pack(side="left", padx=2)
+        ttk.Button(ctrl_frame, text="Export Addendum",
+                   command=export_addendum).pack(side="left", padx=2)
+        ttk.Button(ctrl_frame, text="Export Dedendum",
+                   command=export_dedendum).pack(side="left", padx=2)
 
         # Initial draw
         redraw_canvas()
