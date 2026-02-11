@@ -690,7 +690,7 @@ class TabFlexspline:
         pt_Dp = left_flank[0]      # bottom of left flank
 
         # Addendum connector (linear interpolation in local XY)
-        n_add = 8
+        n_add = 39
         addendum_conn = []
         for j in range(n_add + 1):
             frac = j / n_add
@@ -704,7 +704,7 @@ class TabFlexspline:
         theta_Dp = pt_Dp[0] / rp
         # For single tooth debug, show arc from D to D' (next tooth's D' would be at theta_Dp + pitch)
         # Just show the local dedendum region
-        n_ded = 8
+        n_ded = 39
         dedendum_conn = []
         for j in range(n_ded + 1):
             frac = j / n_ded
@@ -716,7 +716,14 @@ class TabFlexspline:
         # Create debug window
         win = tk.Toplevel()
         win.title("Debug: Single Tooth (Local Coords)")
-        win.geometry("800x700")
+        win.geometry("800x750")
+
+        # Top frame for controls
+        ctrl_frame = ttk.Frame(win)
+        ctrl_frame.pack(pady=(10, 5))
+
+        # Points-only toggle state
+        points_only_var = tk.BooleanVar(value=False)
 
         canvas = tk.Canvas(win, bg="white", width=780, height=580)
         canvas.pack(padx=10, pady=10)
@@ -768,52 +775,97 @@ class TabFlexspline:
             py = cy - (y - data_cy) * scale
             return px, py
 
-        # Draw grid
-        canvas.create_line(margin, cy - (0 - data_cy) * scale,
-                          cw - margin, cy - (0 - data_cy) * scale,
-                          fill="gray80", dash=(2, 2))
-        canvas.create_line(cx - (0 - data_cx) * scale, margin,
-                          cx - (0 - data_cx) * scale, ch - margin,
-                          fill="gray80", dash=(2, 2))
+        def redraw_canvas():
+            """Redraw the canvas based on current toggle state."""
+            canvas.delete("all")
+            show_points_only = points_only_var.get()
 
-        # Draw segments with different colors
-        def draw_pts(pts, color, label, width=2):
-            if len(pts) < 2:
-                return
-            coords = []
-            for x, y in pts:
-                px, py = to_px(x, y)
-                coords.extend([px, py])
-            canvas.create_line(*coords, fill=color, width=width)
-            # Label at midpoint
-            mid = pts[len(pts) // 2]
-            mpx, mpy = to_px(mid[0], mid[1])
-            canvas.create_text(mpx + 15, mpy, text=label, fill=color,
-                              font=("Consolas", 8), anchor="w")
+            # Draw grid
+            canvas.create_line(margin, cy - (0 - data_cy) * scale,
+                              cw - margin, cy - (0 - data_cy) * scale,
+                              fill="gray80", dash=(2, 2))
+            canvas.create_line(cx - (0 - data_cx) * scale, margin,
+                              cx - (0 - data_cx) * scale, ch - margin,
+                              fill="gray80", dash=(2, 2))
 
-        # Draw each segment
-        draw_pts(pts_AB, "blue", "AB (convex)", 3)
-        draw_pts(pts_BC, "green", "BC (tangent)", 3)
-        draw_pts(pts_CD, "purple", "CD (concave)", 3)
-        draw_pts([(-x, y) for x, y in reversed(pts_AB)], "blue", "A'B'", 2)
-        draw_pts([(-x, y) for x, y in reversed(pts_BC)], "green", "B'C'", 2)
-        draw_pts([(-x, y) for x, y in reversed(pts_CD)], "purple", "C'D'", 2)
-        draw_pts(addendum_conn, "red", "", 2)
-        draw_pts(dedendum_conn, "orange", "", 2)
+            if show_points_only:
+                # Draw only points (small circles) for all segments
+                def draw_pts_only(pts, color, label):
+                    if len(pts) == 0:
+                        return
+                    r = 3  # point radius
+                    for x, y in pts:
+                        px, py = to_px(x, y)
+                        canvas.create_oval(px - r, py - r, px + r, py + r,
+                                          fill=color, outline=color)
+                    # Label at midpoint
+                    if label and len(pts) > 0:
+                        mid = pts[len(pts) // 2]
+                        mpx, mpy = to_px(mid[0], mid[1])
+                        canvas.create_text(mpx + 15, mpy, text=label, fill=color,
+                                          font=("Consolas", 8), anchor="w")
 
-        # Draw key points
-        def draw_point(pt, label, color):
-            px, py = to_px(pt[0], pt[1])
-            r = 5
-            canvas.create_oval(px - r, py - r, px + r, py + r,
-                              fill=color, outline="black")
-            canvas.create_text(px + 10, py - 10, text=label,
-                              font=("Consolas", 9, "bold"), fill=color)
+                # Draw each segment's points
+                draw_pts_only(pts_AB, "blue", f"AB ({len(pts_AB)} pts)")
+                draw_pts_only(pts_BC, "green", f"BC ({len(pts_BC)} pts)")
+                draw_pts_only(pts_CD, "purple", f"CD ({len(pts_CD)} pts)")
+                draw_pts_only([(-x, y) for x, y in reversed(pts_AB)], "blue", f"A'B' ({len(pts_AB)} pts)")
+                draw_pts_only([(-x, y) for x, y in reversed(pts_BC)], "green", f"B'C' ({len(pts_BC)} pts)")
+                draw_pts_only([(-x, y) for x, y in reversed(pts_CD)], "purple", f"C'D' ({len(pts_CD)} pts)")
+                draw_pts_only(addendum_conn, "red", f"Add ({len(addendum_conn)} pts)")
+                draw_pts_only(dedendum_conn, "orange", f"Ded ({len(dedendum_conn)} pts)")
 
-        draw_point(pt_A, "", "blue")
-        draw_point(pt_Ap, "'", "blue")
-        draw_point(pt_D, "", "purple")
-        draw_point(pt_Dp, "'", "purple")
+            else:
+                # Draw segments with different colors (lines)
+                def draw_pts(pts, color, label, width=2):
+                    if len(pts) < 2:
+                        return
+                    coords = []
+                    for x, y in pts:
+                        px, py = to_px(x, y)
+                        coords.extend([px, py])
+                    canvas.create_line(*coords, fill=color, width=width)
+                    # Label at midpoint
+                    mid = pts[len(pts) // 2]
+                    mpx, mpy = to_px(mid[0], mid[1])
+                    canvas.create_text(mpx + 15, mpy, text=label, fill=color,
+                                      font=("Consolas", 8), anchor="w")
+
+                # Draw each segment
+                draw_pts(pts_AB, "blue", "AB (convex)", 3)
+                draw_pts(pts_BC, "green", "BC (tangent)", 3)
+                draw_pts(pts_CD, "purple", "CD (concave)", 3)
+                draw_pts([(-x, y) for x, y in reversed(pts_AB)], "blue", "A'B'", 2)
+                draw_pts([(-x, y) for x, y in reversed(pts_BC)], "green", "B'C'", 2)
+                draw_pts([(-x, y) for x, y in reversed(pts_CD)], "purple", "C'D'", 2)
+                draw_pts(addendum_conn, "red", "", 2)
+                draw_pts(dedendum_conn, "orange", "", 2)
+
+            # Draw key points (always shown)
+            def draw_point(pt, label, color):
+                px, py = to_px(pt[0], pt[1])
+                r = 5
+                canvas.create_oval(px - r, py - r, px + r, py + r,
+                                  fill=color, outline="black")
+                canvas.create_text(px + 10, py - 10, text=label,
+                                  font=("Consolas", 9, "bold"), fill=color)
+
+            draw_point(pt_A, "A", "blue")
+            draw_point(pt_Ap, "A'", "blue")
+            draw_point(pt_D, "D", "purple")
+            draw_point(pt_Dp, "D'", "purple")
+
+        # Toggle button callback
+        def toggle_points_only():
+            redraw_canvas()
+
+        # Add the Show Points Only button
+        ttk.Checkbutton(ctrl_frame, text="Show Points Only",
+                        variable=points_only_var,
+                        command=toggle_points_only).pack(side="left", padx=5)
+
+        # Initial draw
+        redraw_canvas()
 
     def _export_sldcrv(self):
         """Export flexspline curve as SolidWorks .sldcrv file."""

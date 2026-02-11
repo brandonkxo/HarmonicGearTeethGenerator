@@ -905,7 +905,7 @@ def build_single_tooth_outline(params: dict) -> dict:
     }
 
 
-def build_full_flexspline(params: dict, n_ded_arc: int = 8) -> dict:
+def build_full_flexspline(params: dict, n_ded_arc: int = 39) -> dict:
     """Pattern the flexspline tooth around the full pitch circle.
 
     Produces one continuous polyline chain:
@@ -1004,7 +1004,7 @@ def build_full_flexspline(params: dict, n_ded_arc: int = 8) -> dict:
     }
 
 
-def build_deformed_flexspline(params: dict, n_ded_arc: int = 8) -> dict:
+def build_deformed_flexspline(params: dict, n_ded_arc: int = 39) -> dict:
     """Pattern the flexspline around the DEFORMED neutral layer.
 
     Uses the paper's coordinate transform (Eqs 14, 21, 23, 27, 29) to show
@@ -1107,7 +1107,7 @@ def build_deformed_flexspline(params: dict, n_ded_arc: int = 8) -> dict:
     }
 
 
-def build_modified_deformed_flexspline(params: dict, d_max: float, n_ded_arc: int = 8) -> dict:
+def build_modified_deformed_flexspline(params: dict, d_max: float, n_ded_arc: int = 39) -> dict:
     """Pattern the flexspline around the DEFORMED neutral layer with radial modification.
 
     This is the same as build_deformed_flexspline, but with the tooth profile
@@ -1215,7 +1215,7 @@ def build_modified_deformed_flexspline(params: dict, d_max: float, n_ded_arc: in
 def build_full_circular_spline(params: dict,
                                 smoothed_flank: list[tuple[float, float]],
                                 rp_c: float,
-                                n_ded_arc: int = 8) -> dict:
+                                n_ded_arc: int = 39) -> dict:
     """Pattern the circular spline conjugate tooth around the full pitch circle.
 
     Uses the pre-computed smoothed_flank (one side of the conjugate tooth
