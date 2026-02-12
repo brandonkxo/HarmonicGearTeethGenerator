@@ -1620,7 +1620,14 @@ def build_full_circular_spline(params: dict,
             r_inner = max(r1 - r_fillet_add, 0.0)
             dx_sq = r_inner ** 2 - dy ** 2
             if dx_sq >= 0.0:
-                cx_fillet = x1_R + math.sqrt(dx_sq)
+                # Determine fillet center position based on arc center relative to profile
+                # If arc center is LEFT of profile point, fillet goes to the right (+)
+                # If arc center is RIGHT of profile point, fillet goes to the left (-)
+                profile_x_top = right_flank_raw[0][0]
+                if x1_R < profile_x_top:
+                    cx_fillet = x1_R + math.sqrt(dx_sq)
+                else:
+                    cx_fillet = x1_R - math.sqrt(dx_sq)
                 dist_to_fillet = math.sqrt((cx_fillet - x1_R) ** 2 + (cy_fillet - y1_R) ** 2)
                 if dist_to_fillet > 1e-9:
                     dir_x = (cx_fillet - x1_R) / dist_to_fillet
@@ -1633,7 +1640,14 @@ def build_full_circular_spline(params: dict,
                     r_inner_root = max(r2 - r_fillet_ded, 0.0)
                     dx_root_sq = r_inner_root ** 2 - dy_root ** 2
                     if dx_root_sq >= 0.0:
-                        cx_root = x2_R - math.sqrt(dx_root_sq)
+                        # Determine fillet center position based on arc center relative to profile
+                        # If arc center is RIGHT of profile point, fillet goes to the left (-)
+                        # If arc center is LEFT of profile point, fillet goes to the right (+)
+                        profile_x_bot = right_flank_raw[-1][0]
+                        if x2_R > profile_x_bot:
+                            cx_root = x2_R - math.sqrt(dx_root_sq)
+                        else:
+                            cx_root = x2_R + math.sqrt(dx_root_sq)
                         dist_to_root = math.sqrt((cx_root - x2_R) ** 2 + (cy_root - y2_R) ** 2)
                         if dist_to_root > 1e-9:
                             dir_x_root = (cx_root - x2_R) / dist_to_root
