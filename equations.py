@@ -1641,33 +1641,63 @@ def build_full_circular_spline(params: dict,
                             pt_CD_trim = (x2_R + r2 * dir_x_root, y2_R + r2 * dir_y_root)
                             pt_ded_trim_r = (cx_root, y_ded)
 
-                            i_top = min(
-                                range(len(right_flank_raw)),
-                                key=lambda idx: (right_flank_raw[idx][0] - pt_AB_trim[0]) ** 2 +
-                                                (right_flank_raw[idx][1] - pt_AB_trim[1]) ** 2
-                            )
-                            i_bot = min(
-                                range(len(right_flank_raw)),
-                                key=lambda idx: (right_flank_raw[idx][0] - pt_CD_trim[0]) ** 2 +
-                                                (right_flank_raw[idx][1] - pt_CD_trim[1]) ** 2
-                            )
-                            if i_top < i_bot:
-                                core = right_flank_raw[i_top:i_bot + 1]
-                                right_flank = [pt_AB_trim] + core + [pt_CD_trim]
-                                pt_add_trim_l = (-pt_add_trim_r[0], pt_add_trim_r[1])
-                                pt_ded_trim_l = (-pt_ded_trim_r[0], pt_ded_trim_r[1])
+                            # Use same angle-based trimming approach as flexspline
+                            # Profile is ordered: addendum (top) -> dedendum (bottom)
+                            # Split into top/middle/bottom based on trim point y-coords
+                            y_top_thresh = pt_AB_trim[1]
+                            y_bot_thresh = pt_CD_trim[1]
 
-                                n_fillet = 12
-                                th0 = math.atan2(pt_AB_trim[1] - cy_fillet, pt_AB_trim[0] - cx_fillet)
-                                th1 = math.atan2(pt_add_trim_r[1] - cy_fillet, pt_add_trim_r[0] - cx_fillet)
-                                fillet_right = _short_arc(th0, th1, n_fillet, cx_fillet, cy_fillet, r_fillet_add)
-                                fillet_left = [(-x, y) for x, y in fillet_right]
+                            top_portion = [pt for pt in right_flank_raw if pt[1] >= y_top_thresh]
+                            mid_portion = [pt for pt in right_flank_raw if y_bot_thresh < pt[1] < y_top_thresh]
+                            bot_portion = [pt for pt in right_flank_raw if pt[1] <= y_bot_thresh]
 
-                                tr0 = math.atan2(pt_CD_trim[1] - cy_root, pt_CD_trim[0] - cx_root)
-                                tr1 = math.atan2(pt_ded_trim_r[1] - cy_root, pt_ded_trim_r[0] - cx_root)
-                                fillet_root_right = _short_arc(tr0, tr1, n_fillet, cx_root, cy_root, r_fillet_ded)
-                                fillet_root_left = [(-x, y) for x, y in reversed(fillet_root_right)]
-                                use_fillets = True
+                            # Trim top portion using angle-based filtering (same as flexspline AB)
+                            angle_trim = math.atan2(pt_AB_trim[1] - y1_R, pt_AB_trim[0] - x1_R)
+                            pts_top_trimmed = []
+                            for pt in top_portion:
+                                angle_pt = math.atan2(pt[1] - y1_R, pt[0] - x1_R)
+                                if angle_pt <= angle_trim + 1e-9:
+                                    pts_top_trimmed.append(pt)
+                            if pts_top_trimmed:
+                                first_pt = pts_top_trimmed[0]
+                                dist_to_trim = math.sqrt((first_pt[0] - pt_AB_trim[0])**2 + (first_pt[1] - pt_AB_trim[1])**2)
+                                if dist_to_trim > 1e-6:
+                                    pts_top_trimmed.insert(0, pt_AB_trim)
+                            else:
+                                pts_top_trimmed = [pt_AB_trim]
+
+                            # Trim bottom portion using angle-based filtering (same as flexspline CD)
+                            angle_cd_trim = math.atan2(pt_CD_trim[1] - y2_R, pt_CD_trim[0] - x2_R)
+                            pts_bot_trimmed = []
+                            for pt in bot_portion:
+                                angle_pt = math.atan2(pt[1] - y2_R, pt[0] - x2_R)
+                                if angle_pt <= angle_cd_trim + 1e-9:
+                                    pts_bot_trimmed.append(pt)
+                            if pts_bot_trimmed:
+                                last_pt = pts_bot_trimmed[-1]
+                                dist_to_trim = math.sqrt((last_pt[0] - pt_CD_trim[0])**2 + (last_pt[1] - pt_CD_trim[1])**2)
+                                if dist_to_trim > 1e-6:
+                                    pts_bot_trimmed.append(pt_CD_trim)
+                            else:
+                                pts_bot_trimmed = [pt_CD_trim]
+
+                            # Assemble: trimmed top + middle (unchanged) + trimmed bottom
+                            right_flank = pts_top_trimmed + mid_portion + pts_bot_trimmed
+
+                            pt_add_trim_l = (-pt_add_trim_r[0], pt_add_trim_r[1])
+                            pt_ded_trim_l = (-pt_ded_trim_r[0], pt_ded_trim_r[1])
+
+                            n_fillet = 12
+                            th0 = math.atan2(pt_AB_trim[1] - cy_fillet, pt_AB_trim[0] - cx_fillet)
+                            th1 = math.atan2(pt_add_trim_r[1] - cy_fillet, pt_add_trim_r[0] - cx_fillet)
+                            fillet_right = _short_arc(th0, th1, n_fillet, cx_fillet, cy_fillet, r_fillet_add)
+                            fillet_left = [(-x, y) for x, y in fillet_right]
+
+                            tr0 = math.atan2(pt_CD_trim[1] - cy_root, pt_CD_trim[0] - cx_root)
+                            tr1 = math.atan2(pt_ded_trim_r[1] - cy_root, pt_ded_trim_r[0] - cx_root)
+                            fillet_root_right = _short_arc(tr0, tr1, n_fillet, cx_root, cy_root, r_fillet_ded)
+                            fillet_root_left = [(-x, y) for x, y in reversed(fillet_root_right)]
+                            use_fillets = True
 
     # Left flank: mirror and reverse (dedendum -> addendum)
     left_flank = [(-x, y) for x, y in reversed(right_flank)]
