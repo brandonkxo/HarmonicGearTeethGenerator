@@ -113,6 +113,65 @@ def _canvas_plot_px(canvas: tk.Canvas) -> int:
 
 # ── Output category definitions ───────────────────────────────────
 
+def _filter_duplicate_points(chain: list[tuple[float, float]],
+                             min_dist: float = 1e-9) -> tuple[list[tuple[float, float]], int]:
+    """Remove consecutive duplicate points with a small tolerance."""
+    filtered = []
+    removed = 0
+    for x, y in chain:
+        if not filtered:
+            filtered.append((x, y))
+            continue
+        dx = x - filtered[-1][0]
+        dy = y - filtered[-1][1]
+        if dx * dx + dy * dy > min_dist * min_dist:
+            filtered.append((x, y))
+        else:
+            removed += 1
+    return filtered, removed
+
+
+def _write_sldcrv(path: str, points: list[tuple[float, float]]) -> None:
+    with open(path, "w") as f:
+        for x, y in points:
+            f.write(f"{x:.6f},{y:.6f},0\n")
+
+
+def _write_dxf_polyline(path: str, points: list[tuple[float, float]]) -> None:
+    """Write a minimal ASCII DXF polyline from XY points."""
+    with open(path, "w") as f:
+        f.write("0\nSECTION\n2\nHEADER\n0\nENDSEC\n")
+        f.write("0\nSECTION\n2\nENTITIES\n")
+        f.write("0\nPOLYLINE\n8\n0\n66\n1\n70\n0\n")
+        for x, y in points:
+            f.write("0\nVERTEX\n8\n0\n")
+            f.write(f"10\n{x:.6f}\n20\n{y:.6f}\n30\n0.000000\n")
+        f.write("0\nSEQEND\n")
+        f.write("0\nENDSEC\n0\nEOF\n")
+
+
+def _export_points(path: str, points: list[tuple[float, float]], fmt: str) -> str:
+    if fmt == ".sldcrv":
+        _write_sldcrv(path, points)
+        return "sldcrv"
+    if fmt == ".dxf":
+        _write_dxf_polyline(path, points)
+        return "dxf"
+    raise ValueError(f"Unsupported export format: {fmt}")
+
+
+def _force_export_extension(path: str, fmt: str) -> str:
+    """Force output path to use selected export format extension."""
+    root, _ = os.path.splitext(path)
+    return f"{root}{fmt}"
+
+
+def _filetypes_for_format(fmt: str) -> list[tuple[str, str]]:
+    if fmt == ".dxf":
+        return [("DXF", "*.dxf"), ("SolidWorks Curve", "*.sldcrv"), ("All files", "*.*")]
+    return [("SolidWorks Curve", "*.sldcrv"), ("DXF", "*.dxf"), ("All files", "*.*")]
+
+
 OUTPUT_CATEGORIES_TAB21 = {
     "Wall Thickness": ["s", "t", "ds"],
     "Deformation Angles": ["alpha", "delta"],
@@ -565,10 +624,14 @@ class TabFlexspline:
     """Flexspline — single tooth on pitch circle with G2 root blends."""
 
     def __init__(self, parent: ttk.Frame,
-                 shared_vars: dict[str, tk.StringVar]):
+                 shared_vars: dict[str, tk.StringVar],
+                 fillet_add_var: tk.StringVar,
+                 fillet_ded_var: tk.StringVar):
         self.frame = parent
         self.entries = shared_vars
         self._last_full = None
+        self.fillet_add_var = fillet_add_var
+        self.fillet_ded_var = fillet_ded_var
 
         # Left: parameters
         left = ttk.Frame(parent, padding=10)
@@ -588,14 +651,21 @@ class TabFlexspline:
             ent.grid(row=row, column=1, pady=2)
             row += 1
 
-        # Fillet radius parameter (flexspline-specific)
-        ttk.Label(left, text="Fillet radius",
+        # Fillet radius parameters (flexspline-specific)
+        ttk.Label(left, text="Addendum fillet r",
                   font=("Consolas", 9)).grid(row=row, column=0,
                                               sticky="w", padx=(0, 6))
-        self.fillet_var = tk.StringVar(value="0.2")
-        ent_fillet = ttk.Entry(left, textvariable=self.fillet_var, width=10,
-                               font=("Consolas", 9))
-        ent_fillet.grid(row=row, column=1, pady=2)
+        ent_fillet_add = ttk.Entry(left, textvariable=self.fillet_add_var,
+                                   width=10, font=("Consolas", 9))
+        ent_fillet_add.grid(row=row, column=1, pady=2)
+        row += 1
+
+        ttk.Label(left, text="Dedendum fillet r",
+                  font=("Consolas", 9)).grid(row=row, column=0,
+                                              sticky="w", padx=(0, 6))
+        ent_fillet_ded = ttk.Entry(left, textvariable=self.fillet_ded_var,
+                                   width=10, font=("Consolas", 9))
+        ent_fillet_ded.grid(row=row, column=1, pady=2)
         row += 1
 
         btn_frame = ttk.Frame(left)
@@ -606,8 +676,22 @@ class TabFlexspline:
         self._zoom_btn = ttk.Button(btn_frame, text="Zoom In",
                                     command=self._toggle_zoom)
         self._zoom_btn.pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(btn_frame, text="Export", command=self._export_sldcrv).pack(
+        ttk.Button(btn_frame, text="Export", command=self._export_curve).pack(
             side=tk.LEFT)
+        row += 1
+
+        ttk.Label(left, text="Export format",
+                  font=("Consolas", 9)).grid(row=row, column=0,
+                                              sticky="w", padx=(0, 6))
+        self.export_format_var = tk.StringVar(value=".sldcrv")
+        ttk.Combobox(
+            left,
+            textvariable=self.export_format_var,
+            values=[".sldcrv", ".dxf"],
+            state="readonly",
+            width=10,
+            font=("Consolas", 9),
+        ).grid(row=row, column=1, pady=2, sticky="w")
         row += 1
 
         # Deformed view toggle button
@@ -709,7 +793,10 @@ class TabFlexspline:
         pt_Dp = left_flank[0]      # bottom of left flank
 
         # === Fillet at A (right side) ===
-        r_fillet = 0.2  # mm
+        try:
+            r_fillet = float(self.fillet_add_var.get())
+        except ValueError:
+            r_fillet = 0.2
 
         # Addendum height in local coords
         y_add = ds + hf + ha
@@ -1051,46 +1138,35 @@ class TabFlexspline:
         # Initial draw
         redraw_canvas()
 
-    def _export_sldcrv(self):
-        """Export flexspline curve as SolidWorks .sldcrv file."""
+    def _export_curve(self):
+        """Export flexspline curve as .sldcrv or .dxf."""
         if self._last_chain is None or len(self._last_chain) == 0:
             self.info_var.set("No data to export. Click Update first.")
             return
 
-        # Use different default filename for deformed vs undeformed
-        default_name = "flexspline_deformed.sldcrv" if self._deformed else "flexspline.sldcrv"
+        fmt = self.export_format_var.get().strip().lower()
+        if fmt not in (".sldcrv", ".dxf"):
+            fmt = ".sldcrv"
+
+        # Use different default filename for deformed vs undeformed.
+        base_name = "flexspline_deformed" if self._deformed else "flexspline"
 
         path = filedialog.asksaveasfilename(
-            defaultextension=".sldcrv",
-            filetypes=[("SolidWorks Curve", "*.sldcrv"), ("All files", "*.*")],
-            initialfile=default_name,
+            defaultextension=fmt,
+            filetypes=_filetypes_for_format(fmt),
+            initialfile=f"{base_name}{fmt}",
         )
         if not path:
             return
+        path = _force_export_extension(path, fmt)
 
-        # Filter only exact duplicate consecutive points (floating point identical)
-        # Use 1e-9 threshold to catch floating point rounding but keep distinct points
-        min_dist = 1e-9
-        filtered = []
-        removed = 0
-        for x, y in self._last_chain:
-            if not filtered:
-                filtered.append((x, y))
-            else:
-                dx = x - filtered[-1][0]
-                dy = y - filtered[-1][1]
-                dist_sq = dx*dx + dy*dy
-                if dist_sq > min_dist * min_dist:
-                    filtered.append((x, y))
-                else:
-                    removed += 1
-
-        with open(path, "w") as f:
-            for x, y in filtered:
-                f.write(f"{x:.6f},{y:.6f},0\n")
+        filtered, removed = _filter_duplicate_points(self._last_chain)
+        out_fmt = _export_points(path, filtered, fmt)
 
         mode = "deformed" if self._deformed else "undeformed"
-        self.info_var.set(f"Exported {len(filtered)} pts ({mode})\n({removed} duplicates removed)\n-> {os.path.basename(path)}")
+        self.info_var.set(
+            f"Exported {len(filtered)} pts ({mode}, {out_fmt})\n"
+            f"({removed} duplicates removed)\n-> {os.path.basename(path)}")
 
     def _read_params(self) -> dict | None:
         params = {}
@@ -1158,17 +1234,23 @@ class TabFlexspline:
         if params is None:
             return
 
-        # Get fillet radius
+        # Get addendum and dedendum fillet radii
         try:
-            r_fillet = float(self.fillet_var.get())
+            r_fillet_add = float(self.fillet_add_var.get())
         except ValueError:
-            r_fillet = 0.2
+            r_fillet_add = 0.2
+        try:
+            r_fillet_ded = float(self.fillet_ded_var.get())
+        except ValueError:
+            r_fillet_ded = r_fillet_add
 
         # Use deformed or undeformed flexspline based on toggle state
         if self._deformed:
-            full = build_deformed_flexspline(params, r_fillet=r_fillet)
+            full = build_deformed_flexspline(
+                params, r_fillet_add=r_fillet_add, r_fillet_ded=r_fillet_ded)
         else:
-            full = build_full_flexspline(params, r_fillet=r_fillet)
+            full = build_full_flexspline(
+                params, r_fillet_add=r_fillet_add, r_fillet_ded=r_fillet_ded)
 
         if "error" in full:
             self.info_var.set(f"Error: {full['error']}")
@@ -1371,10 +1453,14 @@ class TabCircularSpline:
 
     def __init__(self, parent: ttk.Frame,
                  shared_vars: dict[str, tk.StringVar],
-                 smooth_var: tk.StringVar):
+                 smooth_var: tk.StringVar,
+                 fillet_add_var: tk.StringVar,
+                 fillet_ded_var: tk.StringVar):
         self.frame = parent
         self.entries = shared_vars
         self.smooth_var = smooth_var
+        self.fillet_add_var = fillet_add_var
+        self.fillet_ded_var = fillet_ded_var
 
         # Left: parameters
         left = ttk.Frame(parent, padding=10)
@@ -1402,6 +1488,20 @@ class TabCircularSpline:
                   font=("Consolas", 9)).grid(row=row, column=1, pady=2)
         row += 1
 
+        ttk.Label(left, text="Addendum fillet r",
+                  font=("Consolas", 9)).grid(row=row, column=0,
+                                              sticky="w", padx=(0, 6))
+        ttk.Entry(left, textvariable=self.fillet_add_var, width=10,
+                  font=("Consolas", 9)).grid(row=row, column=1, pady=2)
+        row += 1
+
+        ttk.Label(left, text="Dedendum fillet r",
+                  font=("Consolas", 9)).grid(row=row, column=0,
+                                              sticky="w", padx=(0, 6))
+        ttk.Entry(left, textvariable=self.fillet_ded_var, width=10,
+                  font=("Consolas", 9)).grid(row=row, column=1, pady=2)
+        row += 1
+
         btn_frame = ttk.Frame(left)
         btn_frame.grid(row=row, column=0, columnspan=2, pady=10)
         ttk.Button(btn_frame, text="Update", command=self.redraw).pack(
@@ -1410,8 +1510,22 @@ class TabCircularSpline:
         self._zoom_btn = ttk.Button(btn_frame, text="Zoom In",
                                     command=self._toggle_zoom)
         self._zoom_btn.pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(btn_frame, text="Export", command=self._export_sldcrv).pack(
+        ttk.Button(btn_frame, text="Export", command=self._export_curve).pack(
             side=tk.LEFT)
+        row += 1
+
+        ttk.Label(left, text="Export format",
+                  font=("Consolas", 9)).grid(row=row, column=0,
+                                              sticky="w", padx=(0, 6))
+        self.export_format_var = tk.StringVar(value=".sldcrv")
+        ttk.Combobox(
+            left,
+            textvariable=self.export_format_var,
+            values=[".sldcrv", ".dxf"],
+            state="readonly",
+            width=10,
+            font=("Consolas", 9),
+        ).grid(row=row, column=1, pady=2, sticky="w")
         row += 1
 
         # Output category dropdown
@@ -1454,42 +1568,31 @@ class TabCircularSpline:
         self._zoom_btn.config(text="Zoom Out" if self._zoomed else "Zoom In")
         self.redraw()
 
-    def _export_sldcrv(self):
-        """Export circular spline curve as SolidWorks .sldcrv file."""
+    def _export_curve(self):
+        """Export circular spline curve as .sldcrv or .dxf."""
         if self._last_chain is None or len(self._last_chain) == 0:
             self.info_var.set("No data to export. Click Update first.")
             return
 
+        fmt = self.export_format_var.get().strip().lower()
+        if fmt not in (".sldcrv", ".dxf"):
+            fmt = ".sldcrv"
+
         path = filedialog.asksaveasfilename(
-            defaultextension=".sldcrv",
-            filetypes=[("SolidWorks Curve", "*.sldcrv"), ("All files", "*.*")],
-            initialfile="circular_spline.sldcrv",
+            defaultextension=fmt,
+            filetypes=_filetypes_for_format(fmt),
+            initialfile=f"circular_spline{fmt}",
         )
         if not path:
             return
+        path = _force_export_extension(path, fmt)
 
-        # Filter only exact duplicate consecutive points (floating point identical)
-        # Use 1e-9 threshold to catch floating point rounding but keep distinct points
-        min_dist = 1e-9
-        filtered = []
-        removed = 0
-        for x, y in self._last_chain:
-            if not filtered:
-                filtered.append((x, y))
-            else:
-                dx = x - filtered[-1][0]
-                dy = y - filtered[-1][1]
-                dist_sq = dx*dx + dy*dy
-                if dist_sq > min_dist * min_dist:
-                    filtered.append((x, y))
-                else:
-                    removed += 1
+        filtered, removed = _filter_duplicate_points(self._last_chain)
+        out_fmt = _export_points(path, filtered, fmt)
 
-        with open(path, "w") as f:
-            for x, y in filtered:
-                f.write(f"{x:.6f},{y:.6f},0\n")
-
-        self.info_var.set(f"Exported {len(filtered)} points\n({removed} duplicates removed)\n-> {os.path.basename(path)}")
+        self.info_var.set(
+            f"Exported {len(filtered)} points ({out_fmt})\n"
+            f"({removed} duplicates removed)\n-> {os.path.basename(path)}")
 
     def _read_params(self) -> dict | None:
         params = {}
@@ -1562,7 +1665,18 @@ class TabCircularSpline:
         flank = conj.get("smoothed_flank", [])
         rp_c = conj["rp_c"]
 
-        full = build_full_circular_spline(params, flank, rp_c)
+        try:
+            r_fillet_add = float(self.fillet_add_var.get())
+        except ValueError:
+            r_fillet_add = 0.2
+        try:
+            r_fillet_ded = float(self.fillet_ded_var.get())
+        except ValueError:
+            r_fillet_ded = r_fillet_add
+
+        full = build_full_circular_spline(
+            params, flank, rp_c,
+            r_fillet_add=r_fillet_add, r_fillet_ded=r_fillet_ded)
         if "error" in full:
             self.info_var.set(f"Error: {full['error']}")
             return
@@ -2368,11 +2482,16 @@ class App:
         self.shared_vars = {key: tk.StringVar(value=str(DEFAULTS[key]))
                            for key in PARAM_ORDER}
         self.smooth_var = tk.StringVar(value="0.001")
+        self.fillet_add_var = tk.StringVar(value="0.2")
+        self.fillet_ded_var = tk.StringVar(value="0.2")
 
         self.tab21 = Tab21(tab1_frame, self.shared_vars)
         self.tab22 = Tab22(tab2_frame, self.shared_vars, self.smooth_var)
-        self.tab_fs = TabFlexspline(tab3_frame, self.shared_vars)
-        self.tab_cs = TabCircularSpline(tab4_frame, self.shared_vars, self.smooth_var)
+        self.tab_fs = TabFlexspline(
+            tab3_frame, self.shared_vars, self.fillet_add_var, self.fillet_ded_var)
+        self.tab_cs = TabCircularSpline(
+            tab4_frame, self.shared_vars, self.smooth_var,
+            self.fillet_add_var, self.fillet_ded_var)
         self.tab_ov = TabOverlay(tab5_frame, self.shared_vars, self.smooth_var)
 
     def save_config(self):
@@ -2404,10 +2523,21 @@ class App:
         except ValueError:
             smooth = self.smooth_var.get()
 
+        try:
+            fillet_add = float(self.fillet_add_var.get())
+        except ValueError:
+            fillet_add = self.fillet_add_var.get()
+        try:
+            fillet_ded = float(self.fillet_ded_var.get())
+        except ValueError:
+            fillet_ded = self.fillet_ded_var.get()
+
         config_data = {
             "name": name,
             "params": params,
-            "smooth": smooth
+            "smooth": smooth,
+            "fillet_add": fillet_add,
+            "fillet_ded": fillet_ded,
         }
 
         filepath = os.path.join(CONFIG_DIR, f"{safe_name}.json")
@@ -2487,6 +2617,8 @@ class App:
 
         smooth = config_data.get("smooth", 0.001)
         self.smooth_var.set(str(smooth))
+        self.fillet_add_var.set(str(config_data.get("fillet_add", 0.2)))
+        self.fillet_ded_var.set(str(config_data.get("fillet_ded", 0.2)))
 
         config_name = config_data.get("name", selected_file[0][:-5])
         messagebox.showinfo("Loaded", f"Configuration '{config_name}' loaded.")

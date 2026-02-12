@@ -905,7 +905,10 @@ def build_single_tooth_outline(params: dict) -> dict:
     }
 
 
-def build_full_flexspline(params: dict, n_ded_arc: int = 39, r_fillet: float = 0.2) -> dict:
+def build_full_flexspline(params: dict,
+                          n_ded_arc: int = 39,
+                          r_fillet_add: float = 0.2,
+                          r_fillet_ded: float | None = None) -> dict:
     """Pattern the flexspline tooth around the full pitch circle.
 
     Produces one continuous polyline chain:
@@ -913,6 +916,10 @@ def build_full_flexspline(params: dict, n_ded_arc: int = 39, r_fillet: float = 0
 
     The dedendum arc connects the right flank bottom (D) of tooth i
     to the left flank bottom (D') of tooth i+1 along the dedendum circle.
+
+    Fillets:
+        r_fillet_add â€“ addendum-side fillet radius
+        r_fillet_ded â€“ dedendum-side fillet radius (defaults to addendum)
 
     Returns dict with:
         chain_xy  – list of (X, Y) forming the continuous outline
@@ -936,15 +943,16 @@ def build_full_flexspline(params: dict, n_ded_arc: int = 39, r_fillet: float = 0
     y1_R = result["y1_R"]
     r1 = result["r1"]
 
-    # Fillet radius (from parameter)
+    if r_fillet_ded is None:
+        r_fillet_ded = r_fillet_add
 
     # Addendum height in local coords
     y_add = ds + hf + ha
 
     # Solve for fillet center (tangent to AB circle and horizontal addendum)
-    cy_fillet = y_add - r_fillet
+    cy_fillet = y_add - r_fillet_add
     dy = cy_fillet - y1_R
-    r_inner = r1 - r_fillet
+    r_inner = r1 - r_fillet_add
     dx_sq = r_inner**2 - dy**2
     if dx_sq < 0:
         dx_sq = 0
@@ -976,8 +984,8 @@ def build_full_flexspline(params: dict, n_ded_arc: int = 39, r_fillet: float = 0
     for i in range(n_fillet + 1):
         frac = i / n_fillet
         theta = theta_start + frac * d_theta
-        x = cx_fillet + r_fillet * math.cos(theta)
-        y = cy_fillet + r_fillet * math.sin(theta)
+        x = cx_fillet + r_fillet_add * math.cos(theta)
+        y = cy_fillet + r_fillet_add * math.sin(theta)
         fillet_right.append((x, y))
 
     # Mirror for left fillet (don't reverse - need same direction: flank → addendum)
@@ -1000,8 +1008,73 @@ def build_full_flexspline(params: dict, n_ded_arc: int = 39, r_fillet: float = 0
     else:
         pts_AB_trimmed = [pt_AB_trim]
 
-    # Single tooth flanks in local coords (with trimmed AB)
-    right_flank = list(pts_AB_trimmed) + list(result["pts_BC"]) + list(result["pts_CD"])
+    # CD circle parameters for dedendum fillet at flank base
+    x2_R = result["x2_R"]
+    y2_R = result["y2_R"]
+    r2 = result["r2"]
+    y_ded = ds
+
+    # Solve for dedendum fillet center (convex blend to horizontal dedendum)
+    cy_root = y_ded + r_fillet_ded
+    dy_root = cy_root - y2_R
+    # Internal tangency to CD arc; center is on the inward (smaller-x) side.
+    r_inner_root = max(r2 - r_fillet_ded, 0.0)
+    dx_root_sq = r_inner_root**2 - dy_root**2
+    if dx_root_sq < 0:
+        dx_root_sq = 0
+    cx_root = x2_R - math.sqrt(dx_root_sq)
+
+    # Tangent point on CD arc
+    dist_to_root = math.sqrt((cx_root - x2_R)**2 + (cy_root - y2_R)**2)
+    if dist_to_root > 1e-9:
+        dir_x_root = (cx_root - x2_R) / dist_to_root
+        dir_y_root = (cy_root - y2_R) / dist_to_root
+    else:
+        dir_x_root, dir_y_root = 1, 0
+    pt_CD_trim = (x2_R + r2 * dir_x_root, y2_R + r2 * dir_y_root)
+
+    # Tangent point on dedendum
+    pt_ded_trim_r = (cx_root, y_ded)
+    pt_ded_trim_l = (-pt_ded_trim_r[0], pt_ded_trim_r[1])
+
+    # Generate root fillet arc points (right side): flank trim -> dedendum
+    theta_root_start = math.atan2(pt_CD_trim[1] - cy_root, pt_CD_trim[0] - cx_root)
+    theta_root_end = math.atan2(pt_ded_trim_r[1] - cy_root, pt_ded_trim_r[0] - cx_root)
+    d_theta_root = theta_root_end - theta_root_start
+    if d_theta_root > math.pi:
+        d_theta_root -= 2 * math.pi
+    elif d_theta_root < -math.pi:
+        d_theta_root += 2 * math.pi
+
+    fillet_root_right = []
+    for i in range(n_fillet + 1):
+        frac = i / n_fillet
+        theta = theta_root_start + frac * d_theta_root
+        x = cx_root + r_fillet_ded * math.cos(theta)
+        y = cy_root + r_fillet_ded * math.sin(theta)
+        fillet_root_right.append((x, y))
+
+    # Left root fillet runs dedendum -> flank for contour continuity
+    fillet_root_left = [(-x, y) for x, y in reversed(fillet_root_right)]
+
+    # Trim pts_CD to remove points below fillet trim point
+    angle_cd_trim = math.atan2(pt_CD_trim[1] - y2_R, pt_CD_trim[0] - x2_R)
+    pts_CD = result["pts_CD"]
+    pts_CD_trimmed = []
+    for pt in pts_CD:
+        angle_pt = math.atan2(pt[1] - y2_R, pt[0] - x2_R)
+        if angle_pt <= angle_cd_trim + 1e-9:
+            pts_CD_trimmed.append(pt)
+    if pts_CD_trimmed:
+        last_pt = pts_CD_trimmed[-1]
+        dist_to_trim = math.sqrt((last_pt[0] - pt_CD_trim[0])**2 + (last_pt[1] - pt_CD_trim[1])**2)
+        if dist_to_trim > 1e-6:
+            pts_CD_trimmed.append(pt_CD_trim)
+    else:
+        pts_CD_trimmed = [pt_CD_trim]
+
+    # Single tooth flanks in local coords (with trimmed AB + CD)
+    right_flank = list(pts_AB_trimmed) + list(result["pts_BC"]) + list(pts_CD_trimmed)
     left_flank = [(-x, y) for x, y in reversed(right_flank)]
 
     # Dedendum radius
@@ -1016,17 +1089,17 @@ def build_full_flexspline(params: dict, n_ded_arc: int = 39, r_fillet: float = 0
         theta = x_loc / rp + tooth_offset_angle
         return r * math.sin(theta), r * math.cos(theta)
 
-    # Angular positions of D (right flank bottom) and D' (left flank bottom)
-    # in the local tooth frame (before adding tooth offset)
-    pt_D = right_flank[-1]     # bottom of right flank
-    pt_Dp = left_flank[0]      # bottom of left flank
-    theta_D  = pt_D[0] / rp    # angular offset of D from tooth center
-    theta_Dp = pt_Dp[0] / rp   # angular offset of D' from tooth center
+    # Angular positions of dedendum trim points in the local tooth frame
+    theta_D = pt_ded_trim_r[0] / rp
+    theta_Dp = pt_ded_trim_l[0] / rp
 
     chain_xy = []
 
     for i in range(z_f):
         angle_i = i * pitch_angle
+
+        for x_loc, y_loc in fillet_root_left:
+            chain_xy.append(local_to_polar(x_loc, y_loc, angle_i))
 
         # Left flank: D' → A' (dedendum up to addendum, trimmed)
         for x_loc, y_loc in left_flank:
@@ -1049,6 +1122,8 @@ def build_full_flexspline(params: dict, n_ded_arc: int = 39, r_fillet: float = 0
 
         # Right flank: A → D (addendum down to dedendum, trimmed)
         for x_loc, y_loc in right_flank:
+            chain_xy.append(local_to_polar(x_loc, y_loc, angle_i))
+        for x_loc, y_loc in fillet_root_right:
             chain_xy.append(local_to_polar(x_loc, y_loc, angle_i))
 
         # Dedendum arc: D of tooth i → D' of tooth i+1
@@ -1079,7 +1154,10 @@ def build_full_flexspline(params: dict, n_ded_arc: int = 39, r_fillet: float = 0
     }
 
 
-def build_deformed_flexspline(params: dict, n_ded_arc: int = 39, r_fillet: float = 0.2) -> dict:
+def build_deformed_flexspline(params: dict,
+                              n_ded_arc: int = 39,
+                              r_fillet_add: float = 0.2,
+                              r_fillet_ded: float | None = None) -> dict:
     """Pattern the flexspline around the DEFORMED neutral layer.
 
     Uses the paper's coordinate transform (Eqs 14, 21, 23, 27, 29) to show
@@ -1088,6 +1166,10 @@ def build_deformed_flexspline(params: dict, n_ded_arc: int = 39, r_fillet: float
 
     Each tooth is treated as a rigid profile in its local frame and placed
     using the paper's transform with φ₂ = 0 (wave generator at reference).
+
+    Fillets:
+        r_fillet_add â€“ addendum-side fillet radius
+        r_fillet_ded â€“ dedendum-side fillet radius (defaults to addendum)
 
     Returns dict with:
         chain_xy  – list of (X, Y) forming the deformed outline
@@ -1111,15 +1193,16 @@ def build_deformed_flexspline(params: dict, n_ded_arc: int = 39, r_fillet: float
     y1_R = result["y1_R"]
     r1 = result["r1"]
 
-    # Fillet radius (from parameter)
+    if r_fillet_ded is None:
+        r_fillet_ded = r_fillet_add
 
     # Addendum height in local coords
     y_add = ds + hf + ha
 
     # Solve for fillet center (tangent to AB circle and horizontal addendum)
-    cy_fillet = y_add - r_fillet
+    cy_fillet = y_add - r_fillet_add
     dy = cy_fillet - y1_R
-    r_inner = r1 - r_fillet
+    r_inner = r1 - r_fillet_add
     dx_sq = r_inner**2 - dy**2
     if dx_sq < 0:
         dx_sq = 0
@@ -1151,8 +1234,8 @@ def build_deformed_flexspline(params: dict, n_ded_arc: int = 39, r_fillet: float
     for i in range(n_fillet + 1):
         frac = i / n_fillet
         theta = theta_start + frac * d_theta
-        x = cx_fillet + r_fillet * math.cos(theta)
-        y = cy_fillet + r_fillet * math.sin(theta)
+        x = cx_fillet + r_fillet_add * math.cos(theta)
+        y = cy_fillet + r_fillet_add * math.sin(theta)
         fillet_right.append((x, y))
 
     # Mirror for left fillet (don't reverse - need same direction: flank → addendum)
@@ -1175,8 +1258,73 @@ def build_deformed_flexspline(params: dict, n_ded_arc: int = 39, r_fillet: float
     else:
         pts_AB_trimmed = [pt_AB_trim]
 
-    # Single tooth flanks in local coords (with trimmed AB)
-    right_flank = list(pts_AB_trimmed) + list(result["pts_BC"]) + list(result["pts_CD"])
+    # CD circle parameters for dedendum fillet at flank base
+    x2_R = result["x2_R"]
+    y2_R = result["y2_R"]
+    r2 = result["r2"]
+    y_ded = ds
+
+    # Solve for dedendum fillet center (convex blend to horizontal dedendum)
+    cy_root = y_ded + r_fillet_ded
+    dy_root = cy_root - y2_R
+    # Internal tangency to CD arc; center is on the inward (smaller-x) side.
+    r_inner_root = max(r2 - r_fillet_ded, 0.0)
+    dx_root_sq = r_inner_root**2 - dy_root**2
+    if dx_root_sq < 0:
+        dx_root_sq = 0
+    cx_root = x2_R - math.sqrt(dx_root_sq)
+
+    # Tangent point on CD arc
+    dist_to_root = math.sqrt((cx_root - x2_R)**2 + (cy_root - y2_R)**2)
+    if dist_to_root > 1e-9:
+        dir_x_root = (cx_root - x2_R) / dist_to_root
+        dir_y_root = (cy_root - y2_R) / dist_to_root
+    else:
+        dir_x_root, dir_y_root = 1, 0
+    pt_CD_trim = (x2_R + r2 * dir_x_root, y2_R + r2 * dir_y_root)
+
+    # Tangent point on dedendum
+    pt_ded_trim_r = (cx_root, y_ded)
+    pt_ded_trim_l = (-pt_ded_trim_r[0], pt_ded_trim_r[1])
+
+    # Generate root fillet arc points (right side): flank trim -> dedendum
+    theta_root_start = math.atan2(pt_CD_trim[1] - cy_root, pt_CD_trim[0] - cx_root)
+    theta_root_end = math.atan2(pt_ded_trim_r[1] - cy_root, pt_ded_trim_r[0] - cx_root)
+    d_theta_root = theta_root_end - theta_root_start
+    if d_theta_root > math.pi:
+        d_theta_root -= 2 * math.pi
+    elif d_theta_root < -math.pi:
+        d_theta_root += 2 * math.pi
+
+    fillet_root_right = []
+    for i in range(n_fillet + 1):
+        frac = i / n_fillet
+        theta = theta_root_start + frac * d_theta_root
+        x = cx_root + r_fillet_ded * math.cos(theta)
+        y = cy_root + r_fillet_ded * math.sin(theta)
+        fillet_root_right.append((x, y))
+
+    # Left root fillet runs dedendum -> flank for contour continuity
+    fillet_root_left = [(-x, y) for x, y in reversed(fillet_root_right)]
+
+    # Trim pts_CD to remove points below fillet trim point
+    angle_cd_trim = math.atan2(pt_CD_trim[1] - y2_R, pt_CD_trim[0] - x2_R)
+    pts_CD = result["pts_CD"]
+    pts_CD_trimmed = []
+    for pt in pts_CD:
+        angle_pt = math.atan2(pt[1] - y2_R, pt[0] - x2_R)
+        if angle_pt <= angle_cd_trim + 1e-9:
+            pts_CD_trimmed.append(pt)
+    if pts_CD_trimmed:
+        last_pt = pts_CD_trimmed[-1]
+        dist_to_trim = math.sqrt((last_pt[0] - pt_CD_trim[0])**2 + (last_pt[1] - pt_CD_trim[1])**2)
+        if dist_to_trim > 1e-6:
+            pts_CD_trimmed.append(pt_CD_trim)
+    else:
+        pts_CD_trimmed = [pt_CD_trim]
+
+    # Single tooth flanks in local coords (with trimmed AB + CD)
+    right_flank = list(pts_AB_trimmed) + list(result["pts_BC"]) + list(pts_CD_trimmed)
     left_flank = [(-x, y) for x, y in reversed(right_flank)]
 
     # Angular pitch
@@ -1201,13 +1349,16 @@ def build_deformed_flexspline(params: dict, n_ded_arc: int = 39, r_fillet: float
 
     chain_xy = []
 
-    pt_D  = right_flank[-1]   # bottom of right flank (local)
-    pt_Dp = left_flank[0]     # bottom of left flank (local)
+    pt_D = pt_ded_trim_r
+    pt_Dp = pt_ded_trim_l
 
     for i in range(z_f):
         phi      = i * pitch_angle
         next_i   = (i + 1) % z_f
         phi_next = next_i * pitch_angle
+
+        for x_loc, y_loc in fillet_root_left:
+            chain_xy.append(tooth_point_global(x_loc, y_loc, phi))
 
         # Left flank: D' → A' (dedendum up to addendum, trimmed)
         for xr, yr in left_flank:
@@ -1231,6 +1382,8 @@ def build_deformed_flexspline(params: dict, n_ded_arc: int = 39, r_fillet: float
         # Right flank: A → D (addendum down to dedendum, trimmed)
         for xr, yr in right_flank:
             chain_xy.append(tooth_point_global(xr, yr, phi))
+        for x_loc, y_loc in fillet_root_right:
+            chain_xy.append(tooth_point_global(x_loc, y_loc, phi))
 
         # Dedendum arc: D of tooth i → D' of tooth i+1
         # Get the actual transformed endpoints
@@ -1367,7 +1520,9 @@ def build_modified_deformed_flexspline(params: dict, d_max: float, n_ded_arc: in
 def build_full_circular_spline(params: dict,
                                 smoothed_flank: list[tuple[float, float]],
                                 rp_c: float,
-                                n_ded_arc: int = 39) -> dict:
+                                n_ded_arc: int = 39,
+                                r_fillet_add: float = 0.2,
+                                r_fillet_ded: float | None = None) -> dict:
     """Pattern the circular spline conjugate tooth around the full pitch circle.
 
     Uses the pre-computed smoothed_flank (one side of the conjugate tooth
@@ -1376,15 +1531,17 @@ def build_full_circular_spline(params: dict,
     connections.
 
     Parameters:
-        params         – gear parameters dict
-        smoothed_flank – list of (x, y_local) for one flank, sorted
-                         addendum→dedendum (y descending)
-        rp_c           – circular spline pitch radius
-        n_ded_arc      – number of interpolation points per dedendum arc
+        params         - gear parameters dict
+        smoothed_flank - list of (x, y_local) for one flank, sorted
+                         addendum->dedendum (y descending)
+        rp_c           - circular spline pitch radius
+        n_ded_arc      - number of interpolation points per dedendum arc
+        r_fillet_add   - addendum-side fillet radius
+        r_fillet_ded   - dedendum-side fillet radius (defaults to addendum)
 
     Returns dict with:
-        chain_xy  – list of (X, Y) forming the continuous outline
-        rp_c, ha, hf, z_c – geometry references
+        chain_xy  - list of (X, Y) forming the continuous outline
+        rp_c, ha, hf, z_c - geometry references
     Or {"error": msg} on failure.
     """
     if len(smoothed_flank) < 2:
@@ -1402,18 +1559,120 @@ def build_full_circular_spline(params: dict,
     t = mu_t * s
     ds  = s - t / 2.0
 
-    # Right flank: addendum (top) → dedendum (bottom), y descending
-    right_flank = list(smoothed_flank)
+    # Right flank: addendum (top) -> dedendum (bottom), y descending
+    right_flank_raw = list(smoothed_flank)
 
-    # Left flank: mirror and reverse (dedendum → addendum)
+    if r_fillet_ded is None:
+        r_fillet_ded = r_fillet_add
+    r_fillet_add = max(0.0, r_fillet_add)
+    r_fillet_ded = max(0.0, r_fillet_ded)
+
+    def _circle_from_3pts(p1, p2, p3):
+        x1, y1 = p1
+        x2, y2 = p2
+        x3, y3 = p3
+        d = 2.0 * (x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2))
+        if abs(d) < 1e-12:
+            return None
+        ux = ((x1 * x1 + y1 * y1) * (y2 - y3) +
+              (x2 * x2 + y2 * y2) * (y3 - y1) +
+              (x3 * x3 + y3 * y3) * (y1 - y2)) / d
+        uy = ((x1 * x1 + y1 * y1) * (x3 - x2) +
+              (x2 * x2 + y2 * y2) * (x1 - x3) +
+              (x3 * x3 + y3 * y3) * (x2 - x1)) / d
+        return ux, uy, math.sqrt((x1 - ux) ** 2 + (y1 - uy) ** 2)
+
+    def _short_arc(start_angle, end_angle, n_pts, cx, cy, radius):
+        d_theta = end_angle - start_angle
+        if d_theta > math.pi:
+            d_theta -= 2.0 * math.pi
+        elif d_theta < -math.pi:
+            d_theta += 2.0 * math.pi
+        pts = []
+        for k in range(n_pts + 1):
+            frac = k / n_pts
+            th = start_angle + frac * d_theta
+            pts.append((cx + radius * math.cos(th), cy + radius * math.sin(th)))
+        return pts
+
+    use_fillets = False
+    right_flank = list(right_flank_raw)
+    y_add = right_flank_raw[0][1]
+    y_ded = right_flank_raw[-1][1]
+    pt_add_trim_r = right_flank_raw[0]
+    pt_add_trim_l = (-pt_add_trim_r[0], pt_add_trim_r[1])
+    pt_ded_trim_r = right_flank_raw[-1]
+    pt_ded_trim_l = (-pt_ded_trim_r[0], pt_ded_trim_r[1])
+    fillet_right = []
+    fillet_left = []
+    fillet_root_right = []
+    fillet_root_left = []
+
+    if len(right_flank_raw) >= 6 and r_fillet_add > 0.0 and r_fillet_ded > 0.0:
+        top_circle = _circle_from_3pts(right_flank_raw[0], right_flank_raw[1], right_flank_raw[2])
+        bot_circle = _circle_from_3pts(right_flank_raw[-3], right_flank_raw[-2], right_flank_raw[-1])
+        if top_circle is not None and bot_circle is not None:
+            x1_R, y1_R, r1 = top_circle
+            x2_R, y2_R, r2 = bot_circle
+
+            cy_fillet = y_add - r_fillet_add
+            dy = cy_fillet - y1_R
+            r_inner = max(r1 - r_fillet_add, 0.0)
+            dx_sq = r_inner ** 2 - dy ** 2
+            if dx_sq >= 0.0:
+                cx_fillet = x1_R + math.sqrt(dx_sq)
+                dist_to_fillet = math.sqrt((cx_fillet - x1_R) ** 2 + (cy_fillet - y1_R) ** 2)
+                if dist_to_fillet > 1e-9:
+                    dir_x = (cx_fillet - x1_R) / dist_to_fillet
+                    dir_y = (cy_fillet - y1_R) / dist_to_fillet
+                    pt_AB_trim = (x1_R + r1 * dir_x, y1_R + r1 * dir_y)
+                    pt_add_trim_r = (cx_fillet, y_add)
+
+                    cy_root = y_ded + r_fillet_ded
+                    dy_root = cy_root - y2_R
+                    r_inner_root = max(r2 - r_fillet_ded, 0.0)
+                    dx_root_sq = r_inner_root ** 2 - dy_root ** 2
+                    if dx_root_sq >= 0.0:
+                        cx_root = x2_R - math.sqrt(dx_root_sq)
+                        dist_to_root = math.sqrt((cx_root - x2_R) ** 2 + (cy_root - y2_R) ** 2)
+                        if dist_to_root > 1e-9:
+                            dir_x_root = (cx_root - x2_R) / dist_to_root
+                            dir_y_root = (cy_root - y2_R) / dist_to_root
+                            pt_CD_trim = (x2_R + r2 * dir_x_root, y2_R + r2 * dir_y_root)
+                            pt_ded_trim_r = (cx_root, y_ded)
+
+                            i_top = min(
+                                range(len(right_flank_raw)),
+                                key=lambda idx: (right_flank_raw[idx][0] - pt_AB_trim[0]) ** 2 +
+                                                (right_flank_raw[idx][1] - pt_AB_trim[1]) ** 2
+                            )
+                            i_bot = min(
+                                range(len(right_flank_raw)),
+                                key=lambda idx: (right_flank_raw[idx][0] - pt_CD_trim[0]) ** 2 +
+                                                (right_flank_raw[idx][1] - pt_CD_trim[1]) ** 2
+                            )
+                            if i_top < i_bot:
+                                core = right_flank_raw[i_top:i_bot + 1]
+                                right_flank = [pt_AB_trim] + core + [pt_CD_trim]
+                                pt_add_trim_l = (-pt_add_trim_r[0], pt_add_trim_r[1])
+                                pt_ded_trim_l = (-pt_ded_trim_r[0], pt_ded_trim_r[1])
+
+                                n_fillet = 12
+                                th0 = math.atan2(pt_AB_trim[1] - cy_fillet, pt_AB_trim[0] - cx_fillet)
+                                th1 = math.atan2(pt_add_trim_r[1] - cy_fillet, pt_add_trim_r[0] - cx_fillet)
+                                fillet_right = _short_arc(th0, th1, n_fillet, cx_fillet, cy_fillet, r_fillet_add)
+                                fillet_left = [(-x, y) for x, y in fillet_right]
+
+                                tr0 = math.atan2(pt_CD_trim[1] - cy_root, pt_CD_trim[0] - cx_root)
+                                tr1 = math.atan2(pt_ded_trim_r[1] - cy_root, pt_ded_trim_r[0] - cx_root)
+                                fillet_root_right = _short_arc(tr0, tr1, n_fillet, cx_root, cy_root, r_fillet_ded)
+                                fillet_root_left = [(-x, y) for x, y in reversed(fillet_root_right)]
+                                use_fillets = True
+
+    # Left flank: mirror and reverse (dedendum -> addendum)
     left_flank = [(-x, y) for x, y in reversed(right_flank)]
 
     # Dedendum radius for circular spline
-    # In local coords, dedendum is at y_local = -hf (below pitch line)
-    # On the circle: r = rp_c + y_local, so r_ded = rp_c - hf
-    # But the actual dedendum of the circular spline depends on ds:
-    # The bottom of the flank gives us the actual dedendum y
-    y_ded = right_flank[-1][1]  # most negative y in the flank
     r_ded = rp_c + y_ded
 
     # Angular pitch
@@ -1424,9 +1683,9 @@ def build_full_circular_spline(params: dict,
         theta = x_loc / rp_c + tooth_offset_angle
         return r * math.sin(theta), r * math.cos(theta)
 
-    # Angular positions of flank bottom endpoints
-    pt_D = right_flank[-1]     # bottom of right flank
-    pt_Dp = left_flank[0]      # bottom of left flank
+    # Angular positions of dedendum endpoints
+    pt_D = pt_ded_trim_r if use_fillets else right_flank[-1]
+    pt_Dp = pt_ded_trim_l if use_fillets else left_flank[0]
     theta_D  = pt_D[0] / rp_c
     theta_Dp = pt_Dp[0] / rp_c
 
@@ -1435,17 +1694,34 @@ def build_full_circular_spline(params: dict,
     for i in range(z_c):
         angle_i = i * pitch_angle
 
-        # Left flank: D' → A' (dedendum up to addendum)
+        if use_fillets:
+            for x_loc, y_loc in fillet_root_left:
+                chain_xy.append(local_to_polar(x_loc, y_loc, angle_i))
+
+        # Left flank: D' -> A' (dedendum up to addendum)
         for x_loc, y_loc in left_flank:
             chain_xy.append(local_to_polar(x_loc, y_loc, angle_i))
 
-        # Tip is implicit (A' connects to A in the polyline)
+        if use_fillets:
+            for x_loc, y_loc in fillet_left:
+                chain_xy.append(local_to_polar(x_loc, y_loc, angle_i))
+            for j in range(1, n_ded_arc):
+                frac = j / n_ded_arc
+                x_add = pt_add_trim_l[0] + frac * (pt_add_trim_r[0] - pt_add_trim_l[0])
+                y_add_seg = pt_add_trim_l[1] + frac * (pt_add_trim_r[1] - pt_add_trim_l[1])
+                chain_xy.append(local_to_polar(x_add, y_add_seg, angle_i))
+            for x_loc, y_loc in reversed(fillet_right):
+                chain_xy.append(local_to_polar(x_loc, y_loc, angle_i))
 
-        # Right flank: A → D (addendum down to dedendum)
+        # Right flank: A -> D (addendum down to dedendum)
         for x_loc, y_loc in right_flank:
             chain_xy.append(local_to_polar(x_loc, y_loc, angle_i))
 
-        # Dedendum arc: D of tooth i → D' of tooth i+1
+        if use_fillets:
+            for x_loc, y_loc in fillet_root_right:
+                chain_xy.append(local_to_polar(x_loc, y_loc, angle_i))
+
+        # Dedendum arc: D of tooth i -> D' of tooth i+1
         next_i = (i + 1) % z_c
         angle_next = next_i * pitch_angle
         theta_start = theta_D + angle_i
@@ -1460,7 +1736,6 @@ def build_full_circular_spline(params: dict,
             chain_xy.append((r_ded * math.sin(th), r_ded * math.cos(th)))
 
     # Reference radii
-    y_add = right_flank[0][1]   # most positive y (addendum tip)
     r_add = rp_c + y_add
 
     return {
