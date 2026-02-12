@@ -669,11 +669,20 @@ class TabFlexspline:
             return
 
         # Get profile data
+        import math
+
         m = params["m"]
         z_f = int(params["z_f"])
         rp = m * z_f / 2.0
         rm = result["rm"]
         ds = result["ds"]
+        ha = params["ha"]
+        hf = params["hf"]
+
+        # AB circle parameters
+        x1_R = result["x1_R"]
+        y1_R = result["y1_R"]
+        r1 = result["r1"]
 
         pts_AB = result["pts_AB"]
         pts_BC = result["pts_BC"]
@@ -689,13 +698,98 @@ class TabFlexspline:
         pt_D = right_flank[-1]     # bottom of right flank
         pt_Dp = left_flank[0]      # bottom of left flank
 
-        # Addendum connector (linear interpolation in local XY)
+        # === Fillet at A (right side) ===
+        r_fillet = 0.2  # mm
+
+        # Addendum height in local coords
+        y_add = ds + hf + ha
+
+        # Solve for fillet center that is:
+        # 1. At distance (r1 - r_fillet) from AB circle center (internal tangency)
+        # 2. At y = y_add - r_fillet (tangent to horizontal addendum from below)
+        cy = y_add - r_fillet
+
+        # From circle equation: (cx - x1_R)^2 + (cy - y1_R)^2 = (r1 - r_fillet)^2
+        dy = cy - y1_R
+        r_inner = r1 - r_fillet
+        dx_sq = r_inner**2 - dy**2
+        if dx_sq < 0:
+            dx_sq = 0  # Fillet too large, clamp
+        cx = x1_R + math.sqrt(dx_sq)  # Positive sqrt for right side
+
+        # Tangent point on AB arc: where line from AB center to fillet center hits the arc
+        dist_to_fillet = math.sqrt((cx - x1_R)**2 + (cy - y1_R)**2)
+        if dist_to_fillet > 1e-9:
+            dir_x = (cx - x1_R) / dist_to_fillet
+            dir_y = (cy - y1_R) / dist_to_fillet
+        else:
+            dir_x, dir_y = 1, 0
+        pt_AB_trim = (x1_R + r1 * dir_x, y1_R + r1 * dir_y)
+
+        # Tangent point on addendum (directly above fillet center)
+        pt_add_trim_r = (cx, y_add)
+
+        # Trim pts_AB: keep only points at or below pt_AB_trim (by angle from AB center)
+        # Angle of trim point from AB center
+        angle_trim = math.atan2(pt_AB_trim[1] - y1_R, pt_AB_trim[0] - x1_R)
+
+        pts_AB_trimmed = []
+        for pt in pts_AB:
+            angle_pt = math.atan2(pt[1] - y1_R, pt[0] - x1_R)
+            # Keep points with angle <= angle_trim (below or at trim point on the arc)
+            # Since arc goes from high angle (pt_A) to lower angle (toward B)
+            if angle_pt <= angle_trim + 1e-9:
+                pts_AB_trimmed.append(pt)
+
+        # Prepend the trim point if it's not already there
+        if pts_AB_trimmed:
+            first_pt = pts_AB_trimmed[0]
+            dist_to_trim = math.sqrt((first_pt[0] - pt_AB_trim[0])**2 + (first_pt[1] - pt_AB_trim[1])**2)
+            if dist_to_trim > 1e-6:
+                pts_AB_trimmed.insert(0, pt_AB_trim)
+        else:
+            pts_AB_trimmed = [pt_AB_trim]
+
+        # Rebuild right_flank with trimmed AB
+        right_flank = list(pts_AB_trimmed) + list(pts_BC) + list(pts_CD)
+        left_flank = [(-x, y) for x, y in reversed(right_flank)]
+
+        # Update key points
+        pt_A = right_flank[0]  # Now this is the trim point
+        pt_Ap = left_flank[-1]
+
+        # Generate fillet arc points
+        n_fillet = 12
+        theta_start = math.atan2(pt_AB_trim[1] - cy, pt_AB_trim[0] - cx)
+        theta_end = math.atan2(pt_add_trim_r[1] - cy, pt_add_trim_r[0] - cx)
+
+        # Ensure we go the short way (should be a small arc)
+        d_theta = theta_end - theta_start
+        if d_theta > math.pi:
+            d_theta -= 2 * math.pi
+        elif d_theta < -math.pi:
+            d_theta += 2 * math.pi
+
+        fillet_right = []
+        for i in range(n_fillet + 1):
+            frac = i / n_fillet
+            theta = theta_start + frac * d_theta
+            x = cx + r_fillet * math.cos(theta)
+            y = cy + r_fillet * math.sin(theta)
+            fillet_right.append((x, y))
+
+        # === Fillet at A' (left side) - mirror of right ===
+        # Mirror the right fillet
+        fillet_left = [(-x, y) for x, y in reversed(fillet_right)]
+        pt_add_trim_l = (-pt_add_trim_r[0], pt_add_trim_r[1])
+
+        # Addendum connector (between fillet endpoints)
         n_add = 39
         addendum_conn = []
         for j in range(n_add + 1):
             frac = j / n_add
-            x = pt_Ap[0] + frac * (pt_A[0] - pt_Ap[0])
-            y = pt_Ap[1] + frac * (pt_A[1] - pt_Ap[1])
+            x = pt_add_trim_l[0] + frac * (pt_add_trim_r[0] - pt_add_trim_l[0])
+            y = pt_add_trim_l[1] + frac * (pt_add_trim_r[1] - pt_add_trim_l[1])
             addendum_conn.append((x, y))
 
         # Dedendum connector (angular arc at r_ded)
@@ -716,7 +810,7 @@ class TabFlexspline:
         # Create debug window
         win = tk.Toplevel()
         win.title("Debug: Single Tooth (Local Coords)")
-        win.geometry("950x750")
+        win.geometry("1100x750")
 
         # Top frame for controls
         ctrl_frame = ttk.Frame(win)
@@ -741,7 +835,7 @@ class TabFlexspline:
         info_label.pack(pady=(0, 10))
 
         # Compute view bounds
-        all_pts = right_flank + left_flank + addendum_conn + dedendum_conn
+        all_pts = right_flank + left_flank + fillet_right + fillet_left + addendum_conn + dedendum_conn
         x_vals = [p[0] for p in all_pts]
         y_vals = [p[1] for p in all_pts]
         x_min, x_max = min(x_vals), max(x_vals)
@@ -805,13 +899,15 @@ class TabFlexspline:
                         canvas.create_text(mpx + 15, mpy, text=label, fill=color,
                                           font=("Consolas", 8), anchor="w")
 
-                # Draw each segment's points
-                draw_pts_only(pts_AB, "blue", f"AB ({len(pts_AB)} pts)")
+                # Draw each segment's points (using trimmed AB)
+                draw_pts_only(pts_AB_trimmed, "blue", f"AB ({len(pts_AB_trimmed)} pts)")
                 draw_pts_only(pts_BC, "green", f"BC ({len(pts_BC)} pts)")
                 draw_pts_only(pts_CD, "purple", f"CD ({len(pts_CD)} pts)")
-                draw_pts_only([(-x, y) for x, y in reversed(pts_AB)], "blue", f"A'B' ({len(pts_AB)} pts)")
+                draw_pts_only([(-x, y) for x, y in reversed(pts_AB_trimmed)], "blue", f"A'B' ({len(pts_AB_trimmed)} pts)")
                 draw_pts_only([(-x, y) for x, y in reversed(pts_BC)], "green", f"B'C' ({len(pts_BC)} pts)")
                 draw_pts_only([(-x, y) for x, y in reversed(pts_CD)], "purple", f"C'D' ({len(pts_CD)} pts)")
+                draw_pts_only(fillet_right, "magenta", f"FilletR ({len(fillet_right)} pts)")
+                draw_pts_only(fillet_left, "magenta", f"FilletL ({len(fillet_left)} pts)")
                 draw_pts_only(addendum_conn, "red", f"Add ({len(addendum_conn)} pts)")
                 draw_pts_only(dedendum_conn, "orange", f"Ded ({len(dedendum_conn)} pts)")
 
@@ -831,13 +927,15 @@ class TabFlexspline:
                     canvas.create_text(mpx + 15, mpy, text=label, fill=color,
                                       font=("Consolas", 8), anchor="w")
 
-                # Draw each segment
-                draw_pts(pts_AB, "blue", "AB (convex)", 3)
+                # Draw each segment (using trimmed AB)
+                draw_pts(pts_AB_trimmed, "blue", "AB (convex)", 3)
                 draw_pts(pts_BC, "green", "BC (tangent)", 3)
                 draw_pts(pts_CD, "purple", "CD (concave)", 3)
-                draw_pts([(-x, y) for x, y in reversed(pts_AB)], "blue", "A'B'", 2)
+                draw_pts([(-x, y) for x, y in reversed(pts_AB_trimmed)], "blue", "A'B'", 2)
                 draw_pts([(-x, y) for x, y in reversed(pts_BC)], "green", "B'C'", 2)
                 draw_pts([(-x, y) for x, y in reversed(pts_CD)], "purple", "C'D'", 2)
+                draw_pts(fillet_right, "magenta", "Fillet", 2)
+                draw_pts(fillet_left, "magenta", "", 2)
                 draw_pts(addendum_conn, "red", "", 2)
                 draw_pts(dedendum_conn, "orange", "", 2)
 
@@ -912,6 +1010,12 @@ class TabFlexspline:
         def export_dedendum():
             export_segment(dedendum_conn, "dedendum.sldcrv")
 
+        def export_fillet_right():
+            export_segment(fillet_right, "fillet_right.sldcrv")
+
+        def export_fillet_left():
+            export_segment(fillet_left, "fillet_left.sldcrv")
+
         # Add the Show Points Only button
         ttk.Checkbutton(ctrl_frame, text="Show Points Only",
                         variable=points_only_var,
@@ -929,6 +1033,10 @@ class TabFlexspline:
                    command=export_addendum).pack(side="left", padx=2)
         ttk.Button(ctrl_frame, text="Export Dedendum",
                    command=export_dedendum).pack(side="left", padx=2)
+        ttk.Button(ctrl_frame, text="Export Fillet R",
+                   command=export_fillet_right).pack(side="left", padx=2)
+        ttk.Button(ctrl_frame, text="Export Fillet L",
+                   command=export_fillet_left).pack(side="left", padx=2)
 
         # Initial draw
         redraw_canvas()
