@@ -931,8 +931,78 @@ def build_full_flexspline(params: dict, n_ded_arc: int = 39) -> dict:
     ds  = result["ds"]
     rm  = result["rm"]
 
-    # Single tooth flanks in local coords
-    right_flank = list(result["pts_AB"]) + list(result["pts_BC"]) + list(result["pts_CD"])
+    # AB circle parameters for fillet
+    x1_R = result["x1_R"]
+    y1_R = result["y1_R"]
+    r1 = result["r1"]
+
+    # Fillet radius
+    r_fillet = 0.2  # mm
+
+    # Addendum height in local coords
+    y_add = ds + hf + ha
+
+    # Solve for fillet center (tangent to AB circle and horizontal addendum)
+    cy_fillet = y_add - r_fillet
+    dy = cy_fillet - y1_R
+    r_inner = r1 - r_fillet
+    dx_sq = r_inner**2 - dy**2
+    if dx_sq < 0:
+        dx_sq = 0
+    cx_fillet = x1_R + math.sqrt(dx_sq)
+
+    # Tangent point on AB arc
+    dist_to_fillet = math.sqrt((cx_fillet - x1_R)**2 + (cy_fillet - y1_R)**2)
+    if dist_to_fillet > 1e-9:
+        dir_x = (cx_fillet - x1_R) / dist_to_fillet
+        dir_y = (cy_fillet - y1_R) / dist_to_fillet
+    else:
+        dir_x, dir_y = 1, 0
+    pt_AB_trim = (x1_R + r1 * dir_x, y1_R + r1 * dir_y)
+
+    # Tangent point on addendum
+    pt_add_trim_r = (cx_fillet, y_add)
+
+    # Generate fillet arc points (right side)
+    n_fillet = 12
+    theta_start = math.atan2(pt_AB_trim[1] - cy_fillet, pt_AB_trim[0] - cx_fillet)
+    theta_end = math.atan2(pt_add_trim_r[1] - cy_fillet, pt_add_trim_r[0] - cx_fillet)
+    d_theta = theta_end - theta_start
+    if d_theta > math.pi:
+        d_theta -= 2 * math.pi
+    elif d_theta < -math.pi:
+        d_theta += 2 * math.pi
+
+    fillet_right = []
+    for i in range(n_fillet + 1):
+        frac = i / n_fillet
+        theta = theta_start + frac * d_theta
+        x = cx_fillet + r_fillet * math.cos(theta)
+        y = cy_fillet + r_fillet * math.sin(theta)
+        fillet_right.append((x, y))
+
+    # Mirror for left fillet (don't reverse - need same direction: flank → addendum)
+    fillet_left = [(-x, y) for x, y in fillet_right]
+    pt_add_trim_l = (-pt_add_trim_r[0], pt_add_trim_r[1])
+
+    # Trim pts_AB to remove points above fillet trim point
+    angle_trim = math.atan2(pt_AB_trim[1] - y1_R, pt_AB_trim[0] - x1_R)
+    pts_AB = result["pts_AB"]
+    pts_AB_trimmed = []
+    for pt in pts_AB:
+        angle_pt = math.atan2(pt[1] - y1_R, pt[0] - x1_R)
+        if angle_pt <= angle_trim + 1e-9:
+            pts_AB_trimmed.append(pt)
+    if pts_AB_trimmed:
+        first_pt = pts_AB_trimmed[0]
+        dist_to_trim = math.sqrt((first_pt[0] - pt_AB_trim[0])**2 + (first_pt[1] - pt_AB_trim[1])**2)
+        if dist_to_trim > 1e-6:
+            pts_AB_trimmed.insert(0, pt_AB_trim)
+    else:
+        pts_AB_trimmed = [pt_AB_trim]
+
+    # Single tooth flanks in local coords (with trimmed AB)
+    right_flank = list(pts_AB_trimmed) + list(result["pts_BC"]) + list(result["pts_CD"])
     left_flank = [(-x, y) for x, y in reversed(right_flank)]
 
     # Dedendum radius
@@ -959,20 +1029,26 @@ def build_full_flexspline(params: dict, n_ded_arc: int = 39) -> dict:
     for i in range(z_f):
         angle_i = i * pitch_angle
 
-        # Left flank: D' → A' (dedendum up to addendum)
+        # Left flank: D' → A' (dedendum up to addendum, trimmed)
         for x_loc, y_loc in left_flank:
             chain_xy.append(local_to_polar(x_loc, y_loc, angle_i))
 
-        # Addendum line: A' (last of left_flank) → A (first of right_flank)
-        pt_Ap = left_flank[-1]
-        pt_A = right_flank[0]
-        for j in range(1, n_ded_arc + 1):
-            frac = j / n_ded_arc
-            x_loc = pt_Ap[0] + frac * (pt_A[0] - pt_Ap[0])
-            y_loc = pt_Ap[1] + frac * (pt_A[1] - pt_Ap[1])
+        # Left fillet: A' → addendum
+        for x_loc, y_loc in fillet_left:
             chain_xy.append(local_to_polar(x_loc, y_loc, angle_i))
 
-        # Right flank: A → D (addendum down to dedendum)
+        # Addendum line: between fillet endpoints
+        for j in range(1, n_ded_arc):  # Skip endpoints (already in fillets)
+            frac = j / n_ded_arc
+            x_loc = pt_add_trim_l[0] + frac * (pt_add_trim_r[0] - pt_add_trim_l[0])
+            y_loc = pt_add_trim_l[1] + frac * (pt_add_trim_r[1] - pt_add_trim_l[1])
+            chain_xy.append(local_to_polar(x_loc, y_loc, angle_i))
+
+        # Right fillet: addendum → A (reversed since fillet_right goes A → addendum)
+        for x_loc, y_loc in reversed(fillet_right):
+            chain_xy.append(local_to_polar(x_loc, y_loc, angle_i))
+
+        # Right flank: A → D (addendum down to dedendum, trimmed)
         for x_loc, y_loc in right_flank:
             chain_xy.append(local_to_polar(x_loc, y_loc, angle_i))
 
