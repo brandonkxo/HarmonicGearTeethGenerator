@@ -1655,62 +1655,61 @@ def build_full_circular_spline(params: dict,
                             pt_CD_trim = (x2_R + r2 * dir_x_root, y2_R + r2 * dir_y_root)
                             pt_ded_trim_r = (cx_root, y_ded)
 
-                            # Use same angle-based trimming approach as flexspline
-                            # Profile is ordered: addendum (top) -> dedendum (bottom)
-                            # Split into top/middle/bottom based on trim point y-coords
-                            y_top_thresh = pt_AB_trim[1]
-                            y_bot_thresh = pt_CD_trim[1]
-
-                            top_portion = [pt for pt in right_flank_raw if pt[1] >= y_top_thresh]
-                            mid_portion = [pt for pt in right_flank_raw if y_bot_thresh < pt[1] < y_top_thresh]
-                            bot_portion = [pt for pt in right_flank_raw if pt[1] <= y_bot_thresh]
-
-                            # Trim top portion using angle-based filtering (same as flexspline AB)
-                            angle_trim = math.atan2(pt_AB_trim[1] - y1_R, pt_AB_trim[0] - x1_R)
-                            pts_top_trimmed = []
-                            for pt in top_portion:
-                                angle_pt = math.atan2(pt[1] - y1_R, pt[0] - x1_R)
-                                if angle_pt <= angle_trim + 1e-9:
-                                    pts_top_trimmed.append(pt)
-                            if pts_top_trimmed:
-                                first_pt = pts_top_trimmed[0]
-                                dist_to_trim = math.sqrt((first_pt[0] - pt_AB_trim[0])**2 + (first_pt[1] - pt_AB_trim[1])**2)
-                                if dist_to_trim > 1e-6:
-                                    pts_top_trimmed.insert(0, pt_AB_trim)
-                            else:
-                                pts_top_trimmed = [pt_AB_trim]
-
-                            # Trim bottom portion using angle-based filtering (same as flexspline CD)
-                            angle_cd_trim = math.atan2(pt_CD_trim[1] - y2_R, pt_CD_trim[0] - x2_R)
-                            pts_bot_trimmed = []
-                            for pt in bot_portion:
-                                angle_pt = math.atan2(pt[1] - y2_R, pt[0] - x2_R)
-                                if angle_pt <= angle_cd_trim + 1e-9:
-                                    pts_bot_trimmed.append(pt)
-                            if pts_bot_trimmed:
-                                last_pt = pts_bot_trimmed[-1]
-                                dist_to_trim = math.sqrt((last_pt[0] - pt_CD_trim[0])**2 + (last_pt[1] - pt_CD_trim[1])**2)
-                                if dist_to_trim > 1e-6:
-                                    pts_bot_trimmed.append(pt_CD_trim)
-                            else:
-                                pts_bot_trimmed = [pt_CD_trim]
-
-                            # Assemble: trimmed top + middle (unchanged) + trimmed bottom
-                            right_flank = pts_top_trimmed + mid_portion + pts_bot_trimmed
-
-                            pt_add_trim_l = (-pt_add_trim_r[0], pt_add_trim_r[1])
-                            pt_ded_trim_l = (-pt_ded_trim_r[0], pt_ded_trim_r[1])
-
+                            # Generate fillet arcs first, then find where they intersect the profile
                             n_fillet = 12
-                            th0 = math.atan2(pt_AB_trim[1] - cy_fillet, pt_AB_trim[0] - cx_fillet)
+
+                            # Generate addendum fillet arc (from addendum line down into tooth)
+                            th_add_line = math.atan2(pt_add_trim_r[1] - cy_fillet, pt_add_trim_r[0] - cx_fillet)
+                            # Extend arc further than needed to find intersection
+                            th_add_extend = th_add_line - math.pi / 2  # 90 degrees past addendum
+                            fillet_arc_full = _short_arc(th_add_extend, th_add_line, n_fillet * 2, cx_fillet, cy_fillet, r_fillet_add)
+
+                            # Find where fillet arc intersects/meets the profile (closest approach)
+                            best_fillet_idx = 0
+                            best_profile_idx = 0
+                            best_dist = float('inf')
+                            for fi, fpt in enumerate(fillet_arc_full):
+                                for pi, ppt in enumerate(right_flank_raw):
+                                    d = math.sqrt((fpt[0] - ppt[0])**2 + (fpt[1] - ppt[1])**2)
+                                    if d < best_dist:
+                                        best_dist = d
+                                        best_fillet_idx = fi
+                                        best_profile_idx = pi
+
+                            # Trim profile: keep points from intersection down (lower y values)
+                            # Profile is ordered top to bottom (y descending)
+                            right_flank_trimmed_top = right_flank_raw[best_profile_idx:]
+
+                            # The fillet starts at the intersection point and goes to addendum
+                            fillet_start_pt = fillet_arc_full[best_fillet_idx]
+                            th0 = math.atan2(fillet_start_pt[1] - cy_fillet, fillet_start_pt[0] - cx_fillet)
                             th1 = math.atan2(pt_add_trim_r[1] - cy_fillet, pt_add_trim_r[0] - cx_fillet)
                             fillet_right = _short_arc(th0, th1, n_fillet, cx_fillet, cy_fillet, r_fillet_add)
                             fillet_left = [(-x, y) for x, y in fillet_right]
 
+                            # Trim bottom of profile using angle-based filtering (original approach)
+                            angle_cd_trim = math.atan2(pt_CD_trim[1] - y2_R, pt_CD_trim[0] - x2_R)
+                            right_flank = []
+                            for pt in right_flank_trimmed_top:
+                                angle_pt = math.atan2(pt[1] - y2_R, pt[0] - x2_R)
+                                if angle_pt <= angle_cd_trim + 1e-9:
+                                    right_flank.append(pt)
+                            if right_flank:
+                                last_pt = right_flank[-1]
+                                dist_to_trim = math.sqrt((last_pt[0] - pt_CD_trim[0])**2 + (last_pt[1] - pt_CD_trim[1])**2)
+                                if dist_to_trim > 1e-6:
+                                    right_flank.append(pt_CD_trim)
+                            else:
+                                right_flank = list(right_flank_trimmed_top)
+
+                            # Dedendum fillet uses the theoretical trim point (original approach)
                             tr0 = math.atan2(pt_CD_trim[1] - cy_root, pt_CD_trim[0] - cx_root)
                             tr1 = math.atan2(pt_ded_trim_r[1] - cy_root, pt_ded_trim_r[0] - cx_root)
                             fillet_root_right = _short_arc(tr0, tr1, n_fillet, cx_root, cy_root, r_fillet_ded)
                             fillet_root_left = [(-x, y) for x, y in reversed(fillet_root_right)]
+
+                            pt_add_trim_l = (-pt_add_trim_r[0], pt_add_trim_r[1])
+                            pt_ded_trim_l = (-pt_ded_trim_r[0], pt_ded_trim_r[1])
                             use_fillets = True
 
     # Left flank: mirror and reverse (dedendum -> addendum)
