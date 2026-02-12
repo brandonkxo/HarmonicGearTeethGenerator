@@ -588,6 +588,16 @@ class TabFlexspline:
             ent.grid(row=row, column=1, pady=2)
             row += 1
 
+        # Fillet radius parameter (flexspline-specific)
+        ttk.Label(left, text="Fillet radius",
+                  font=("Consolas", 9)).grid(row=row, column=0,
+                                              sticky="w", padx=(0, 6))
+        self.fillet_var = tk.StringVar(value="0.2")
+        ent_fillet = ttk.Entry(left, textvariable=self.fillet_var, width=10,
+                               font=("Consolas", 9))
+        ent_fillet.grid(row=row, column=1, pady=2)
+        row += 1
+
         btn_frame = ttk.Frame(left)
         btn_frame.grid(row=row, column=0, columnspan=2, pady=10)
         ttk.Button(btn_frame, text="Update", command=self.redraw).pack(
@@ -1148,11 +1158,17 @@ class TabFlexspline:
         if params is None:
             return
 
+        # Get fillet radius
+        try:
+            r_fillet = float(self.fillet_var.get())
+        except ValueError:
+            r_fillet = 0.2
+
         # Use deformed or undeformed flexspline based on toggle state
         if self._deformed:
-            full = build_deformed_flexspline(params)
+            full = build_deformed_flexspline(params, r_fillet=r_fillet)
         else:
-            full = build_full_flexspline(params)
+            full = build_full_flexspline(params, r_fillet=r_fillet)
 
         if "error" in full:
             self.info_var.set(f"Error: {full['error']}")
