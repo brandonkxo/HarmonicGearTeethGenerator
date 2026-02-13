@@ -1201,10 +1201,13 @@ class TabFlexspline:
                 f"ds = {ds:.4f} mm")
         elif category == "Circle Radii":
             w0 = full.get("w0", 0)
+            s = full["s"]
+            rb = rm - (s - ds)  # inner diameter of flex spline
             if self._deformed and w0 > 0:
                 self.info_var.set(
                     f"rp = {full['rp']:.4f} mm (pitch)\n"
                     f"rm = {rm:.4f} mm (neutral)\n"
+                    f"rb = {rb:.4f} mm (inner)\n"
                     f"w0 = {w0:.4f} mm (deform)\n"
                     f"rho_max = {rm + w0:.4f} mm\n"
                     f"rho_min = {rm - w0:.4f} mm")
@@ -1212,6 +1215,7 @@ class TabFlexspline:
                 self.info_var.set(
                     f"rp = {full['rp']:.4f} mm (pitch)\n"
                     f"rm = {rm:.4f} mm (neutral)\n"
+                    f"rb = {rb:.4f} mm (inner)\n"
                     f"r_add = {r_add:.4f} mm\n"
                     f"r_ded = {r_ded:.4f} mm")
         elif category == "Tooth Heights":
