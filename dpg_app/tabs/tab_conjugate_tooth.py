@@ -12,7 +12,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from equations import compute_profile, compute_conjugate_profile, smooth_conjugate_profile
 
-from dpg_app.app_state import AppState
+from dpg_app.app_state import AppState, scaled
 from dpg_app.widgets.parameter_panel import create_parameter_panel, create_button_row
 from dpg_app.widgets.output_panel import (
     create_output_panel, update_output_values, create_info_text, update_info_text
@@ -22,13 +22,14 @@ from dpg_app.export_manager import show_export_dialog
 # Module-level cache
 _last_result = None
 _last_smoothed = None
+_first_update = True
 
 
 def create_tab_conjugate_tooth():
     """Create the Tab 2.2 content."""
     with dpg.group(horizontal=True):
         # Left panel - Parameters
-        with dpg.child_window(width=340, border=True):
+        with dpg.child_window(width=scaled(340), border=True):
             create_parameter_panel(
                 tag_prefix="tab22",
                 on_change=_on_param_change,
@@ -179,9 +180,12 @@ def _update_plot():
         )
         dpg.bind_item_theme("series_flank_mirror", "theme_line_mirror")
 
-    # Fit axes
-    dpg.fit_axis_data("tab22_x")
-    dpg.fit_axis_data("tab22_y")
+    # Fit axes only on first update
+    global _first_update
+    if _first_update:
+        dpg.fit_axis_data("tab22_x")
+        dpg.fit_axis_data("tab22_y")
+        _first_update = False
 
     # Update outputs
     _update_outputs(result, smoothed)

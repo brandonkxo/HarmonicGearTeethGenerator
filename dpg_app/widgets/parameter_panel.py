@@ -8,7 +8,7 @@ import dearpygui.dearpygui as dpg
 from typing import Callable, Optional
 
 from dpg_app.app_state import (
-    AppState, PARAM_GROUPS, get_param_label, get_param_tooltip
+    AppState, PARAM_GROUPS, get_param_label, get_param_tooltip, scaled
 )
 from equations import DEFAULTS, PARAM_ORDER
 
@@ -108,7 +108,7 @@ def _create_param_input(
             dpg.add_input_int(
                 tag=input_tag,
                 default_value=int(default),
-                width=130,
+                width=scaled(130),
                 min_value=1,
                 min_clamped=True,
                 callback=_make_param_callback(key, on_change)
@@ -119,7 +119,7 @@ def _create_param_input(
             dpg.add_input_float(
                 tag=input_tag,
                 default_value=default,
-                width=130,
+                width=scaled(130),
                 format="%.4f",
                 callback=_make_param_callback(key, on_change)
             )
@@ -147,7 +147,7 @@ def _create_special_input(
         dpg.add_input_float(
             tag=input_tag,
             default_value=default,
-            width=130,
+            width=scaled(130),
             format="%.4f",
             callback=_make_special_callback(key, on_change)
         )
@@ -215,7 +215,7 @@ def create_button_row(
             label="Update",
             tag=f"btn_update_{tag_prefix}",
             callback=on_update,
-            width=95
+            width=scaled(95)
         )
         dpg.bind_item_theme(update_btn, "theme_button_update")
 
@@ -224,7 +224,7 @@ def create_button_row(
         reset_btn = dpg.add_button(
             label="Reset",
             callback=reset_callback,
-            width=95
+            width=scaled(95)
         )
         dpg.bind_item_theme(reset_btn, "theme_button_reset")
 
@@ -233,7 +233,7 @@ def create_button_row(
             export_btn = dpg.add_button(
                 label="Export",
                 callback=on_export,
-                width=95
+                width=scaled(95)
             )
             dpg.bind_item_theme(export_btn, "theme_button_export")
 
@@ -246,5 +246,5 @@ def create_button_row(
                 items=export_formats,
                 tag=f"{tag_prefix}_export_format",
                 default_value=export_formats[0],
-                width=120
+                width=scaled(120)
             )

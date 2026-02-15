@@ -10,6 +10,25 @@ from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, Callable, List
 import copy
 
+# Global DPI scale factor (set by main.py on startup)
+_dpi_scale = 1.0
+
+
+def set_dpi_scale(scale: float):
+    """Set the global DPI scale factor."""
+    global _dpi_scale
+    _dpi_scale = scale
+
+
+def get_dpi_scale() -> float:
+    """Get the global DPI scale factor."""
+    return _dpi_scale
+
+
+def scaled(value: int) -> int:
+    """Scale a pixel value by the DPI scale factor."""
+    return int(value * _dpi_scale)
+
 # Import defaults from equations module
 import sys
 import os

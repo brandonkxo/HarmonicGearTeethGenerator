@@ -7,12 +7,31 @@ Entry point for the redesigned GUI using DearPyGui.
 import dearpygui.dearpygui as dpg
 import sys
 import os
+import ctypes
+
+# Get DPI scale factor and enable DPI awareness on Windows
+_dpi_scale = 1.0
+if sys.platform == "win32":
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # Per-monitor DPI aware
+        # Get the DPI scale factor
+        user32 = ctypes.windll.user32
+        user32.SetProcessDPIAware()
+        dc = user32.GetDC(0)
+        dpi = ctypes.windll.gdi32.GetDeviceCaps(dc, 88)  # LOGPIXELSX
+        user32.ReleaseDC(0, dc)
+        _dpi_scale = dpi / 96.0  # 96 is the default DPI
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
 
 # Add parent directory to path for equations import
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dpg_app.themes import create_themes, setup_fonts
-from dpg_app.app_state import AppState
+from dpg_app.app_state import AppState, set_dpi_scale
 from dpg_app.config_manager import show_save_dialog, show_load_dialog
 from dpg_app.tabs.tab_flexspline_tooth import create_tab_flexspline_tooth
 from dpg_app.tabs.tab_conjugate_tooth import create_tab_conjugate_tooth
@@ -157,8 +176,11 @@ def main():
     """Main entry point for the application."""
     dpg.create_context()
 
+    # Set DPI scale for other modules to use
+    set_dpi_scale(_dpi_scale)
+
     # Setup fonts first (must be before viewport creation)
-    setup_fonts()
+    setup_fonts(_dpi_scale)
 
     # Create themes
     create_themes()
@@ -166,13 +188,13 @@ def main():
     # Initialize application state
     AppState.initialize()
 
-    # Create viewport
+    # Create viewport (scale dimensions for high-DPI displays)
     dpg.create_viewport(
         title="Harmonic Drive - DCT Tooth Calculator",
-        width=1400,
-        height=900,
-        min_width=1000,
-        min_height=700
+        width=int(1400 * _dpi_scale),
+        height=int(900 * _dpi_scale),
+        min_width=int(1000 * _dpi_scale),
+        min_height=int(700 * _dpi_scale)
     )
 
     # Create main window

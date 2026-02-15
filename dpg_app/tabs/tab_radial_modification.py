@@ -16,7 +16,7 @@ from equations import (
     build_modified_deformed_flexspline
 )
 
-from dpg_app.app_state import AppState
+from dpg_app.app_state import AppState, scaled
 from dpg_app.widgets.parameter_panel import create_parameter_panel, create_button_row
 from dpg_app.widgets.output_panel import (
     create_output_panel, update_output_values, create_info_text, update_info_text,
@@ -34,13 +34,14 @@ _interference_pts = []
 _zoomed = False
 _show_deformed = True
 _modification_applied = False
+_first_update = True
 
 
 def create_tab_radial_modification():
     """Create the Tab 2.5 content."""
     with dpg.group(horizontal=True):
         # Left panel - Parameters
-        with dpg.child_window(width=340, border=True):
+        with dpg.child_window(width=scaled(340), border=True):
             create_parameter_panel(
                 tag_prefix="tab_ov",
                 on_change=_on_param_change,
@@ -64,13 +65,13 @@ def create_tab_radial_modification():
                     label="Zoom In",
                     tag="btn_zoom_ov",
                     callback=_toggle_zoom,
-                    width=80
+                    width=scaled(80)
                 )
                 dpg.add_button(
                     label="Show Undeformed",
                     tag="btn_deform_ov",
                     callback=_toggle_deformed,
-                    width=120
+                    width=scaled(120)
                 )
 
             dpg.add_spacer(height=10)
@@ -87,14 +88,14 @@ def create_tab_radial_modification():
                     label="Export Modified",
                     tag="btn_export_mod",
                     callback=_export_modified,
-                    width=120,
+                    width=scaled(120),
                     enabled=False
                 )
                 dpg.add_button(
                     label="Export Wave Gen",
                     tag="btn_export_wg",
                     callback=_export_wave_gen,
-                    width=120
+                    width=scaled(120)
                 )
 
             create_output_panel(
@@ -182,12 +183,14 @@ def _update_plot():
     _clear_plot_series()
     _draw_overlay()
 
-    # Set view
+    # Set view (only fit on first update)
+    global _first_update
     if _zoomed:
         _set_zoomed_view(rp_c)
-    else:
+    elif _first_update:
         dpg.fit_axis_data("tab_ov_x")
         dpg.fit_axis_data("tab_ov_y")
+        _first_update = False
 
     # Update outputs
     _update_outputs()

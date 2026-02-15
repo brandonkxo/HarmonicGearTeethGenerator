@@ -14,7 +14,7 @@ from equations import (
     compute_conjugate_profile, smooth_conjugate_profile, build_full_circular_spline
 )
 
-from dpg_app.app_state import AppState
+from dpg_app.app_state import AppState, scaled
 from dpg_app.widgets.parameter_panel import create_parameter_panel, create_button_row
 from dpg_app.widgets.output_panel import (
     create_output_panel, update_output_values, create_info_text, update_info_text
@@ -24,13 +24,14 @@ from dpg_app.export_manager import show_export_dialog
 # Module-level state
 _last_result = None
 _zoomed = False
+_first_update = True
 
 
 def create_tab_circular_spline():
     """Create the Tab 2.4 content."""
     with dpg.group(horizontal=True):
         # Left panel - Parameters
-        with dpg.child_window(width=340, border=True):
+        with dpg.child_window(width=scaled(340), border=True):
             create_parameter_panel(
                 tag_prefix="tab_cs",
                 on_change=_on_param_change,
@@ -53,7 +54,7 @@ def create_tab_circular_spline():
                 label="Zoom In",
                 tag="btn_zoom_cs",
                 callback=_toggle_zoom,
-                width=80
+                width=scaled(80)
             )
 
             create_output_panel(
@@ -153,12 +154,14 @@ def _update_plot():
     # Draw reference circles
     _draw_reference_circles(result, rp_c, y_axis)
 
-    # Set view
+    # Set view (only fit on first update)
+    global _first_update
     if _zoomed:
         _set_zoomed_view(rp_c)
-    else:
+    elif _first_update:
         dpg.fit_axis_data("tab_cs_x")
         dpg.fit_axis_data("tab_cs_y")
+        _first_update = False
 
     # Update outputs
     _update_outputs(result, rp_c)

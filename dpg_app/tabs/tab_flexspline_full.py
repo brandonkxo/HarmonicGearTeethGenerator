@@ -12,7 +12,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from equations import build_full_flexspline, build_deformed_flexspline
 
-from dpg_app.app_state import AppState
+from dpg_app.app_state import AppState, scaled
 from dpg_app.widgets.parameter_panel import create_parameter_panel, create_button_row
 from dpg_app.widgets.output_panel import (
     create_output_panel, update_output_values, create_info_text, update_info_text
@@ -23,13 +23,14 @@ from dpg_app.export_manager import show_export_dialog
 _last_result = None
 _deformed = False
 _zoomed = False
+_first_update = True
 
 
 def create_tab_flexspline_full():
     """Create the Tab 2.3 content."""
     with dpg.group(horizontal=True):
         # Left panel - Parameters
-        with dpg.child_window(width=340, border=True):
+        with dpg.child_window(width=scaled(340), border=True):
             create_parameter_panel(
                 tag_prefix="tab_fs",
                 on_change=_on_param_change,
@@ -53,13 +54,13 @@ def create_tab_flexspline_full():
                     label="Zoom In",
                     tag="btn_zoom_fs",
                     callback=_toggle_zoom,
-                    width=80
+                    width=scaled(80)
                 )
                 dpg.add_button(
                     label="Show Deformed",
                     tag="btn_deform_fs",
                     callback=_toggle_deformed,
-                    width=150
+                    width=scaled(150)
                 )
 
             create_output_panel(
@@ -142,12 +143,14 @@ def _update_plot():
     # Draw reference circles
     _draw_reference_circles(result, params, y_axis)
 
-    # Set axis limits based on zoom state
+    # Set axis limits based on zoom state (only fit on first update)
+    global _first_update
     if _zoomed:
         _set_zoomed_view(result)
-    else:
+    elif _first_update:
         dpg.fit_axis_data("tab_fs_x")
         dpg.fit_axis_data("tab_fs_y")
+        _first_update = False
 
     # Update outputs
     _update_outputs(result, params)

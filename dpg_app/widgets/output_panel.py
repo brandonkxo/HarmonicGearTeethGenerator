@@ -6,6 +6,7 @@ Provides category dropdown and formatted output values.
 
 import dearpygui.dearpygui as dpg
 from typing import Dict, List, Callable, Optional, Any
+from dpg_app.app_state import scaled
 
 
 # Output categories for each tab type
@@ -131,7 +132,7 @@ def create_output_panel(
     # Output display area
     with dpg.child_window(
         tag=f"{tag_prefix}_output_display",
-        height=120,
+        height=scaled(120),
         border=False
     ):
         # Create text widgets for each possible output value (initially hidden)
@@ -216,7 +217,7 @@ def create_info_text(tag_prefix: str, initial_text: str = "Click Update to compu
     dpg.add_text(
         initial_text,
         tag=f"{tag_prefix}_info",
-        wrap=310,
+        wrap=scaled(310),
         color=(150, 150, 150)
     )
 

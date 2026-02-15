@@ -12,7 +12,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from equations import compute_profile
 
-from dpg_app.app_state import AppState
+from dpg_app.app_state import AppState, scaled
 from dpg_app.widgets.parameter_panel import create_parameter_panel, create_button_row
 from dpg_app.widgets.output_panel import (
     create_output_panel, update_output_values, create_info_text, update_info_text
@@ -21,13 +21,14 @@ from dpg_app.themes import COLORS
 
 # Module-level cache for last computation result
 _last_result = None
+_first_update = True
 
 
 def create_tab_flexspline_tooth():
     """Create the Tab 2.1 content."""
     with dpg.group(horizontal=True):
         # Left panel - Parameters
-        with dpg.child_window(width=340, border=True):
+        with dpg.child_window(width=scaled(340), border=True):
             create_parameter_panel(
                 tag_prefix="tab21",
                 on_change=_on_param_change,
@@ -151,9 +152,12 @@ def _update_plot():
     # Draw circle centers
     _draw_circle_centers(result, y_axis)
 
-    # Fit axes to data
-    dpg.fit_axis_data("tab21_x")
-    dpg.fit_axis_data("tab21_y")
+    # Fit axes to data only on first update
+    global _first_update
+    if _first_update:
+        dpg.fit_axis_data("tab21_x")
+        dpg.fit_axis_data("tab21_y")
+        _first_update = False
 
     # Update output values
     _update_outputs(result)

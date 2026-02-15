@@ -60,8 +60,10 @@ COLORS = {
 }
 
 
-def setup_fonts():
+def setup_fonts(dpi_scale: float = 1.0):
     """Configure fonts for the application."""
+    font_size = int(14 * dpi_scale)
+
     with dpg.font_registry():
         # Try to load Consolas for consistency with original app
         font_paths = [
@@ -74,7 +76,7 @@ def setup_fonts():
         for path in font_paths:
             if os.path.exists(path):
                 try:
-                    default_font = dpg.add_font(path, 14)
+                    default_font = dpg.add_font(path, font_size)
                     break
                 except Exception:
                     continue
