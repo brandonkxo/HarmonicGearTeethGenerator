@@ -2499,19 +2499,132 @@ class App:
         self.tab_ov = TabOverlay(tab5_frame, self.shared_vars, self.smooth_var)
 
     def save_config(self):
-        """Save current parameters to a named JSON config file."""
-        name = simpledialog.askstring(
-            "Save Configuration",
-            "Enter configuration name:",
-            parent=self.root
-        )
-        if not name:
-            return
+        """Save current parameters to a named JSON config file with file explorer dialog."""
+        # Create a file explorer-like dialog
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Save Configuration")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.geometry("500x550")
+        dialog.minsize(450, 500)
 
-        # Sanitize filename (remove invalid characters)
-        safe_name = "".join(c for c in name if c.isalnum() or c in " _-").strip()
-        if not safe_name:
-            messagebox.showerror("Error", "Invalid configuration name.")
+        # List existing config files
+        def refresh_file_list():
+            listbox.delete(0, tk.END)
+            try:
+                files = sorted([f for f in os.listdir(CONFIG_DIR) if f.endswith(".json")])
+            except Exception:
+                files = []
+            for f in files:
+                listbox.insert(tk.END, f[:-5])  # Remove .json extension
+            return files
+
+        # Header
+        ttk.Label(dialog, text="Existing Configurations:",
+                  font=("Consolas", 10, "bold")).pack(padx=10, pady=(10, 5), anchor="w")
+
+        # Listbox with scrollbar
+        list_frame = ttk.Frame(dialog)
+        list_frame.pack(padx=10, pady=5, fill=tk.BOTH, expand=True)
+
+        scrollbar = ttk.Scrollbar(list_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        listbox = tk.Listbox(list_frame, font=("Consolas", 9), width=40, height=12,
+                             yscrollcommand=scrollbar.set)
+        listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=listbox.yview)
+
+        refresh_file_list()
+
+        # File name entry
+        entry_frame = ttk.Frame(dialog)
+        entry_frame.pack(padx=10, pady=10, fill=tk.X)
+        ttk.Label(entry_frame, text="File name:", font=("Consolas", 9)).pack(side=tk.LEFT)
+        name_var = tk.StringVar()
+        name_entry = ttk.Entry(entry_frame, textvariable=name_var, font=("Consolas", 9), width=35)
+        name_entry.pack(side=tk.LEFT, padx=(5, 0), fill=tk.X, expand=True)
+
+        # Update entry when listbox selection changes
+        def on_select(event):
+            sel = listbox.curselection()
+            if sel:
+                name_var.set(listbox.get(sel[0]))
+
+        listbox.bind("<<ListboxSelect>>", on_select)
+
+        result = [None]
+
+        def do_save():
+            name = name_var.get().strip()
+            if not name:
+                messagebox.showerror("Error", "Please enter a configuration name.", parent=dialog)
+                return
+
+            # Sanitize filename
+            safe_name = "".join(c for c in name if c.isalnum() or c in " _-").strip()
+            if not safe_name:
+                messagebox.showerror("Error", "Invalid configuration name.", parent=dialog)
+                return
+
+            # Check if overwriting existing file
+            filepath = os.path.join(CONFIG_DIR, f"{safe_name}.json")
+            if os.path.exists(filepath):
+                confirm = messagebox.askyesno(
+                    "Overwrite?",
+                    f"'{safe_name}.json' already exists.\nDo you want to overwrite it?",
+                    parent=dialog
+                )
+                if not confirm:
+                    return
+
+            result[0] = safe_name
+            dialog.destroy()
+
+        def do_delete():
+            sel = listbox.curselection()
+            if not sel:
+                messagebox.showwarning("No Selection", "Select a configuration to delete.", parent=dialog)
+                return
+
+            filename = listbox.get(sel[0])
+            confirm = messagebox.askyesno(
+                "Delete Configuration",
+                f"Are you sure you want to delete '{filename}'?",
+                parent=dialog
+            )
+            if confirm:
+                filepath = os.path.join(CONFIG_DIR, f"{filename}.json")
+                try:
+                    os.remove(filepath)
+                    refresh_file_list()
+                    name_var.set("")
+                    messagebox.showinfo("Deleted", f"'{filename}.json' deleted.", parent=dialog)
+                except Exception as e:
+                    messagebox.showerror("Error", f"Failed to delete:\n{e}", parent=dialog)
+
+        def do_cancel():
+            dialog.destroy()
+
+        # Buttons
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=10)
+        ttk.Button(btn_frame, text="Save", command=do_save, width=10).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Delete", command=do_delete, width=10).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=do_cancel, width=10).pack(side=tk.LEFT, padx=5)
+
+        # Double-click to select and populate entry
+        listbox.bind("<Double-1>", lambda e: do_save() if name_var.get().strip() else None)
+
+        # Focus entry
+        name_entry.focus_set()
+
+        # Handle Enter key
+        name_entry.bind("<Return>", lambda e: do_save())
+
+        dialog.wait_window()
+
+        if not result[0]:
             return
 
         # Collect current parameter values
@@ -2537,65 +2650,105 @@ class App:
             fillet_ded = self.fillet_ded_var.get()
 
         config_data = {
-            "name": name,
+            "name": result[0],
             "params": params,
             "smooth": smooth,
             "fillet_add": fillet_add,
             "fillet_ded": fillet_ded,
         }
 
-        filepath = os.path.join(CONFIG_DIR, f"{safe_name}.json")
+        filepath = os.path.join(CONFIG_DIR, f"{result[0]}.json")
         try:
             with open(filepath, "w") as f:
                 json.dump(config_data, f, indent=2)
-            messagebox.showinfo("Saved", f"Configuration saved to:\n{safe_name}.json")
+            messagebox.showinfo("Saved", f"Configuration saved to:\n{result[0]}.json")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save configuration:\n{e}")
 
     def load_config(self):
-        """Load parameters from a saved JSON config file."""
-        # List available config files
-        try:
-            files = [f for f in os.listdir(CONFIG_DIR) if f.endswith(".json")]
-        except Exception:
-            files = []
-
-        if not files:
-            messagebox.showinfo("No Configs", "No saved configurations found.")
-            return
-
-        # Create a selection dialog
+        """Load parameters from a saved JSON config file with file explorer dialog."""
+        # Create a file explorer-like dialog
         dialog = tk.Toplevel(self.root)
         dialog.title("Load Configuration")
         dialog.transient(self.root)
         dialog.grab_set()
+        dialog.geometry("500x550")
+        dialog.minsize(450, 500)
 
-        ttk.Label(dialog, text="Select a configuration:",
-                  font=("Consolas", 10)).pack(padx=10, pady=(10, 5))
+        # List config files
+        def refresh_file_list():
+            listbox.delete(0, tk.END)
+            try:
+                files = sorted([f for f in os.listdir(CONFIG_DIR) if f.endswith(".json")])
+            except Exception:
+                files = []
+            for f in files:
+                listbox.insert(tk.END, f[:-5])  # Remove .json extension
+            return files
 
-        listbox = tk.Listbox(dialog, font=("Consolas", 9), width=40, height=10)
-        listbox.pack(padx=10, pady=5, fill=tk.BOTH, expand=True)
+        # Header
+        ttk.Label(dialog, text="Select a Configuration:",
+                  font=("Consolas", 10, "bold")).pack(padx=10, pady=(10, 5), anchor="w")
 
-        for f in sorted(files):
-            listbox.insert(tk.END, f[:-5])  # Remove .json extension
+        # Listbox with scrollbar
+        list_frame = ttk.Frame(dialog)
+        list_frame.pack(padx=10, pady=5, fill=tk.BOTH, expand=True)
+
+        scrollbar = ttk.Scrollbar(list_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        listbox = tk.Listbox(list_frame, font=("Consolas", 9), width=40, height=12,
+                             yscrollcommand=scrollbar.set)
+        listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=listbox.yview)
+
+        files = refresh_file_list()
+
+        if not files:
+            messagebox.showinfo("No Configs", "No saved configurations found.", parent=dialog)
+            dialog.destroy()
+            return
 
         selected_file = [None]
 
         def on_load():
             sel = listbox.curselection()
-            if sel:
-                selected_file[0] = files[sel[0]] if sel[0] < len(files) else sorted(files)[sel[0]]
-                # Find the actual filename from sorted list
-                selected_file[0] = sorted(files)[sel[0]]
+            if not sel:
+                messagebox.showwarning("No Selection", "Select a configuration to load.", parent=dialog)
+                return
+            selected_file[0] = sorted([f for f in os.listdir(CONFIG_DIR) if f.endswith(".json")])[sel[0]]
             dialog.destroy()
+
+        def on_delete():
+            sel = listbox.curselection()
+            if not sel:
+                messagebox.showwarning("No Selection", "Select a configuration to delete.", parent=dialog)
+                return
+
+            filename = listbox.get(sel[0])
+            confirm = messagebox.askyesno(
+                "Delete Configuration",
+                f"Are you sure you want to delete '{filename}'?",
+                parent=dialog
+            )
+            if confirm:
+                filepath = os.path.join(CONFIG_DIR, f"{filename}.json")
+                try:
+                    os.remove(filepath)
+                    refresh_file_list()
+                    messagebox.showinfo("Deleted", f"'{filename}.json' deleted.", parent=dialog)
+                except Exception as e:
+                    messagebox.showerror("Error", f"Failed to delete:\n{e}", parent=dialog)
 
         def on_cancel():
             dialog.destroy()
 
+        # Buttons
         btn_frame = ttk.Frame(dialog)
         btn_frame.pack(pady=10)
-        ttk.Button(btn_frame, text="Load", command=on_load).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Cancel", command=on_cancel).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Load", command=on_load, width=10).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Delete", command=on_delete, width=10).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=on_cancel, width=10).pack(side=tk.LEFT, padx=5)
 
         # Double-click to load
         listbox.bind("<Double-1>", lambda e: on_load())
