@@ -197,13 +197,12 @@ def main():
         min_height=int(700 * _dpi_scale)
     )
 
-    # Set application icon (use PNG directly for better quality)
+    # Set application icon
     icon_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Ref Images")
-    small_icon = os.path.join(icon_dir, "icon_32.png")
-    large_icon = os.path.join(icon_dir, "Logo.png")
-    if os.path.exists(small_icon) and os.path.exists(large_icon):
-        dpg.set_viewport_small_icon(small_icon)
-        dpg.set_viewport_large_icon(large_icon)
+    icon_path = os.path.join(icon_dir, "app_icon.ico")
+    if os.path.exists(icon_path):
+        dpg.set_viewport_small_icon(icon_path)
+        dpg.set_viewport_large_icon(icon_path)
 
     # Create main window
     create_main_window()
