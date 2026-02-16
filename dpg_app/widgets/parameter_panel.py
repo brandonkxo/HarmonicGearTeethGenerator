@@ -110,8 +110,7 @@ def _create_param_input(
                 default_value=int(default),
                 width=scaled(130),
                 min_value=1,
-                min_clamped=True,
-                callback=_make_param_callback(key, on_change)
+                min_clamped=True
             )
         else:
             # Float parameters
@@ -120,9 +119,18 @@ def _create_param_input(
                 tag=input_tag,
                 default_value=default,
                 width=scaled(130),
-                format="%.4f",
-                callback=_make_param_callback(key, on_change)
+                format="%.4f"
             )
+
+        # Add handler for deactivation (click away or Enter)
+        handler_tag = f"{input_tag}_handler"
+        if dpg.does_item_exist(handler_tag):
+            dpg.delete_item(handler_tag)
+        with dpg.item_handler_registry(tag=handler_tag):
+            dpg.add_item_deactivated_after_edit_handler(
+                callback=_make_param_callback(key, on_change, input_tag)
+            )
+        dpg.bind_item_handler_registry(input_tag, handler_tag)
 
         # Add tooltip
         if tooltip:
@@ -148,20 +156,47 @@ def _create_special_input(
             tag=input_tag,
             default_value=default,
             width=scaled(130),
-            format="%.4f",
-            callback=_make_special_callback(key, on_change)
+            format="%.4f"
         )
+
+        # Add handler for deactivation (click away or Enter)
+        handler_tag = f"{input_tag}_handler"
+        if dpg.does_item_exist(handler_tag):
+            dpg.delete_item(handler_tag)
+        with dpg.item_handler_registry(tag=handler_tag):
+            dpg.add_item_deactivated_after_edit_handler(
+                callback=_make_special_callback(key, on_change, input_tag)
+            )
+        dpg.bind_item_handler_registry(input_tag, handler_tag)
 
         if tooltip:
             with dpg.tooltip(parent=input_tag):
                 dpg.add_text(tooltip, wrap=250)
 
 
-def _make_param_callback(key: str, on_change: Optional[Callable]):
+def _make_param_callback(key: str, on_change: Optional[Callable], widget_tag: str):
     """Create a callback for parameter changes."""
-    def callback(sender, app_data, user_data):
+    def callback(sender, app_data, user_data=None):
+        # Get value from the widget using stored tag
+        value = dpg.get_value(widget_tag)
+
+        if value is None:
+            return
+
         # Update state
-        AppState.set_param(key, float(app_data), record_undo=True)
+        AppState.set_param(key, float(value), record_undo=True)
+
+        # Enforce harmonic drive constraint: z_c = z_f + 2
+        if key == "z_f":
+            new_z_c = int(value) + 2
+            AppState.set_param("z_c", float(new_z_c), record_undo=False)
+            # Update all z_c widgets across tabs
+            _update_linked_widgets("z_c", new_z_c)
+        elif key == "z_c":
+            new_z_f = int(value) - 2
+            AppState.set_param("z_f", float(new_z_f), record_undo=False)
+            # Update all z_f widgets across tabs
+            _update_linked_widgets("z_f", new_z_f)
 
         # Auto-update plot
         if on_change:
@@ -170,16 +205,33 @@ def _make_param_callback(key: str, on_change: Optional[Callable]):
     return callback
 
 
-def _make_special_callback(key: str, on_change: Optional[Callable]):
+def _update_linked_widgets(key: str, value):
+    """Update all widgets for a parameter across all tabs."""
+    # List of known tab prefixes
+    tab_prefixes = ["tab21", "tab22", "tab_fs", "tab_cs", "tab_ov"]
+
+    for prefix in tab_prefixes:
+        widget_tag = f"{prefix}_param_{key}"
+        if dpg.does_item_exist(widget_tag):
+            dpg.set_value(widget_tag, int(value) if key in ("z_f", "z_c") else value)
+
+
+def _make_special_callback(key: str, on_change: Optional[Callable], widget_tag: str):
     """Create a callback for special parameter changes (smooth, fillets)."""
-    def callback(sender, app_data, user_data):
+    def callback(sender, app_data, user_data=None):
+        # Get value from the widget using stored tag
+        value = dpg.get_value(widget_tag)
+
+        if value is None:
+            return
+
         # Update appropriate state
         if key == "smooth":
-            AppState.set_smooth(float(app_data))
+            AppState.set_smooth(float(value))
         elif key == "fillet_add":
-            AppState.set_fillet_add(float(app_data))
+            AppState.set_fillet_add(float(value))
         elif key == "fillet_ded":
-            AppState.set_fillet_ded(float(app_data))
+            AppState.set_fillet_ded(float(value))
 
         # Auto-update plot
         if on_change:
