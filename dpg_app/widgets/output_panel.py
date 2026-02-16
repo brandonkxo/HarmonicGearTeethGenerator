@@ -6,7 +6,20 @@ Provides category dropdown and formatted output values.
 
 import dearpygui.dearpygui as dpg
 from typing import Dict, List, Callable, Optional, Any
+import os
+
 from dpg_app.app_state import scaled
+
+# Path to reference images
+REF_IMAGES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "Ref Images")
+
+# Categories that have reference images
+CATEGORY_REF_IMAGES = {
+    "Circle Radii": "Flexspline Ref Radii.png",
+}
+
+# Track loaded textures
+_loaded_textures = {}
 
 
 # Output categories for each tab type
@@ -24,7 +37,7 @@ OUTPUT_CATEGORIES = {
     },
     "flexspline_full": {
         "Wall Thickness": ["s", "t", "ds"],
-        "Circle Radii": ["rp", "rm", "r_add", "r_ded"],
+        "Circle Radii": ["rp", "rm", "rb", "r_add", "r_ded"],
         "Tooth Heights": ["ha", "hf"],
         "Mesh Info": ["z_f", "chain_points"],
     },
@@ -55,6 +68,7 @@ OUTPUT_LABELS = {
     "rp": "Pitch radius rp",
     "rp_c": "Pitch radius rp_c",
     "rm": "Neutral radius rm",
+    "rb": "Inner radius rb",
     "r_add": "Addendum radius",
     "r_ded": "Dedendum radius",
     "ha": "Addendum h\u2090",
@@ -83,12 +97,108 @@ OUTPUT_UNITS = {
     "rp": "mm",
     "rp_c": "mm",
     "rm": "mm",
+    "rb": "mm",
     "r_add": "mm",
     "r_ded": "mm",
     "ha": "mm",
     "hf": "mm",
     "d_max": "mm",
 }
+
+
+def _load_texture(image_path: str) -> Optional[int]:
+    """Load an image as a texture, returning the texture tag."""
+    if image_path in _loaded_textures:
+        return _loaded_textures[image_path]
+
+    if not os.path.exists(image_path):
+        print(f"Image not found: {image_path}")
+        return None
+
+    try:
+        width, height, channels, data = dpg.load_image(image_path)
+
+        # Create texture registry if it doesn't exist
+        if not dpg.does_item_exist("ref_texture_registry"):
+            dpg.add_texture_registry(tag="ref_texture_registry")
+
+        texture_tag = f"texture_{os.path.basename(image_path)}"
+        if not dpg.does_item_exist(texture_tag):
+            dpg.add_static_texture(
+                width=width,
+                height=height,
+                default_value=data,
+                tag=texture_tag,
+                parent="ref_texture_registry"
+            )
+
+        _loaded_textures[image_path] = (texture_tag, width, height)
+        return _loaded_textures[image_path]
+    except Exception as e:
+        print(f"Error loading texture: {e}")
+        return None
+
+
+def show_reference_image(sender, app_data, user_data):
+    """Show reference image for a category in a popup window."""
+    category = user_data
+    print(f"show_reference_image called with category: {category}")
+
+    if category not in CATEGORY_REF_IMAGES:
+        print(f"Category '{category}' not in CATEGORY_REF_IMAGES")
+        return
+
+    image_file = CATEGORY_REF_IMAGES[category]
+    image_path = os.path.join(REF_IMAGES_DIR, image_file)
+    print(f"Image path: {image_path}")
+    print(f"Image exists: {os.path.exists(image_path)}")
+
+    # Clean up existing window
+    if dpg.does_item_exist("ref_image_window"):
+        dpg.delete_item("ref_image_window")
+
+    # Load texture
+    texture_info = _load_texture(image_path)
+    print(f"Texture info: {texture_info}")
+    if texture_info is None:
+        print("Failed to load texture")
+        return
+
+    texture_tag, img_width, img_height = texture_info
+
+    # Scale image to fit reasonably on screen
+    max_width = scaled(800)
+    max_height = scaled(600)
+
+    scale = min(max_width / img_width, max_height / img_height, 1.0)
+    display_width = int(img_width * scale)
+    display_height = int(img_height * scale)
+
+    # Create popup window
+    window_width = display_width + scaled(20)
+    window_height = display_height + scaled(50)
+
+    print(f"Creating window with size {window_width}x{window_height}")
+    with dpg.window(
+        label=f"{category} Reference",
+        tag="ref_image_window",
+        modal=True,
+        width=window_width,
+        height=window_height,
+        pos=(dpg.get_viewport_width() // 2 - window_width // 2,
+             dpg.get_viewport_height() // 2 - window_height // 2),
+        no_resize=False,
+        no_collapse=True,
+        on_close=lambda: dpg.delete_item("ref_image_window")
+    ):
+        dpg.add_image(texture_tag, width=display_width, height=display_height)
+        dpg.add_spacer(height=5)
+        dpg.add_button(
+            label="Close",
+            callback=lambda: dpg.delete_item("ref_image_window"),
+            width=-1
+        )
+    print("Window created successfully")
 
 
 def create_output_panel(
@@ -145,6 +255,19 @@ def create_output_panel(
                     color=(200, 200, 200)
                 )
 
+        # Add help buttons for categories with reference images (initially hidden)
+        for category in categories.keys():
+            if category in CATEGORY_REF_IMAGES:
+                dpg.add_spacer(height=5, tag=f"{tag_prefix}_help_spacer_{category}", show=False)
+                dpg.add_button(
+                    label="Explain these radii?",
+                    tag=f"{tag_prefix}_help_btn_{category}",
+                    callback=show_reference_image,
+                    user_data=category,
+                    show=False,
+                    small=True
+                )
+
     # Show initial category
     _show_category_outputs(tag_prefix, tab_type, category_names[0])
 
@@ -165,12 +288,20 @@ def _show_category_outputs(tag_prefix: str, tab_type: str, category: str):
     """Show outputs for the selected category, hide others."""
     categories = OUTPUT_CATEGORIES.get(tab_type, {})
 
-    # Hide all outputs first
-    for cat_keys in categories.values():
+    # Hide all outputs and help buttons first
+    for cat, cat_keys in categories.items():
         for key in cat_keys:
             widget_tag = f"{tag_prefix}_out_{key}"
             if dpg.does_item_exist(widget_tag):
                 dpg.configure_item(widget_tag, show=False)
+
+        # Hide help buttons
+        help_btn_tag = f"{tag_prefix}_help_btn_{cat}"
+        help_spacer_tag = f"{tag_prefix}_help_spacer_{cat}"
+        if dpg.does_item_exist(help_btn_tag):
+            dpg.configure_item(help_btn_tag, show=False)
+        if dpg.does_item_exist(help_spacer_tag):
+            dpg.configure_item(help_spacer_tag, show=False)
 
     # Show outputs for selected category
     selected_keys = categories.get(category, [])
@@ -178,6 +309,15 @@ def _show_category_outputs(tag_prefix: str, tab_type: str, category: str):
         widget_tag = f"{tag_prefix}_out_{key}"
         if dpg.does_item_exist(widget_tag):
             dpg.configure_item(widget_tag, show=True)
+
+    # Show help button if this category has a reference image
+    if category in CATEGORY_REF_IMAGES:
+        help_btn_tag = f"{tag_prefix}_help_btn_{category}"
+        help_spacer_tag = f"{tag_prefix}_help_spacer_{category}"
+        if dpg.does_item_exist(help_btn_tag):
+            dpg.configure_item(help_btn_tag, show=True)
+        if dpg.does_item_exist(help_spacer_tag):
+            dpg.configure_item(help_spacer_tag, show=True)
 
 
 def update_output_values(tag_prefix: str, values: Dict[str, Any]):

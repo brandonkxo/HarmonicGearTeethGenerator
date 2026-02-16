@@ -9,7 +9,7 @@ import json
 import os
 from typing import List, Optional
 
-from dpg_app.app_state import AppState, PARAM_TOOLTIPS
+from dpg_app.app_state import AppState, PARAM_TOOLTIPS, scaled
 from equations import PARAM_ORDER
 
 # Configuration directory (relative to main script)
@@ -158,13 +158,15 @@ def show_save_dialog():
         if selected:
             dpg.set_value("save_name_input", selected)
 
+    dialog_width = scaled(450)
+    dialog_height = scaled(500)
     with dpg.window(
         label="Save Configuration",
         tag="save_dialog",
         modal=True,
-        width=450,
-        height=500,
-        pos=(dpg.get_viewport_width() // 2 - 225, dpg.get_viewport_height() // 2 - 250),
+        width=dialog_width,
+        height=dialog_height,
+        pos=(dpg.get_viewport_width() // 2 - dialog_width // 2, dpg.get_viewport_height() // 2 - dialog_height // 2),
         no_resize=False,
         no_collapse=True,
     ):
@@ -191,9 +193,9 @@ def show_save_dialog():
 
         dpg.add_spacer(height=10)
         with dpg.group(horizontal=True):
-            dpg.add_button(label="Save", callback=on_save, width=100)
-            dpg.add_button(label="Delete", callback=on_delete, width=100)
-            dpg.add_button(label="Cancel", callback=lambda: dpg.delete_item("save_dialog"), width=100)
+            dpg.add_button(label="Save", callback=on_save, width=scaled(100))
+            dpg.add_button(label="Delete", callback=on_delete, width=scaled(100))
+            dpg.add_button(label="Cancel", callback=lambda: dpg.delete_item("save_dialog"), width=scaled(100))
 
         dpg.add_spacer(height=5)
         dpg.add_text("", tag="save_status", color=(150, 150, 150))
@@ -208,13 +210,15 @@ def show_load_dialog():
 
     if not configs:
         # Show simple message
+        empty_width = scaled(300)
+        empty_height = scaled(120)
         with dpg.window(
             label="Load Configuration",
             tag="load_dialog",
             modal=True,
-            width=300,
-            height=120,
-            pos=(dpg.get_viewport_width() // 2 - 150, dpg.get_viewport_height() // 2 - 60),
+            width=empty_width,
+            height=empty_height,
+            pos=(dpg.get_viewport_width() // 2 - empty_width // 2, dpg.get_viewport_height() // 2 - empty_height // 2),
             no_resize=True,
             no_collapse=True,
         ):
@@ -248,13 +252,15 @@ def show_load_dialog():
         else:
             dpg.configure_item("load_status", default_value="Delete failed!", color=(255, 100, 100))
 
+    dialog_width = scaled(450)
+    dialog_height = scaled(450)
     with dpg.window(
         label="Load Configuration",
         tag="load_dialog",
         modal=True,
-        width=450,
-        height=450,
-        pos=(dpg.get_viewport_width() // 2 - 225, dpg.get_viewport_height() // 2 - 225),
+        width=dialog_width,
+        height=dialog_height,
+        pos=(dpg.get_viewport_width() // 2 - dialog_width // 2, dpg.get_viewport_height() // 2 - dialog_height // 2),
         no_resize=False,
         no_collapse=True,
     ):
@@ -270,9 +276,9 @@ def show_load_dialog():
 
         dpg.add_spacer(height=10)
         with dpg.group(horizontal=True):
-            dpg.add_button(label="Load", callback=on_load, width=100)
-            dpg.add_button(label="Delete", callback=on_delete, width=100)
-            dpg.add_button(label="Cancel", callback=lambda: dpg.delete_item("load_dialog"), width=100)
+            dpg.add_button(label="Load", callback=on_load, width=scaled(100))
+            dpg.add_button(label="Delete", callback=on_delete, width=scaled(100))
+            dpg.add_button(label="Cancel", callback=lambda: dpg.delete_item("load_dialog"), width=scaled(100))
 
         dpg.add_spacer(height=5)
         dpg.add_text("", tag="load_status", color=(150, 150, 150))

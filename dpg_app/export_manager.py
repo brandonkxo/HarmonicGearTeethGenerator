@@ -8,6 +8,10 @@ import dearpygui.dearpygui as dpg
 import os
 from typing import List, Tuple, Optional
 import math
+import tkinter as tk
+from tkinter import filedialog
+
+from dpg_app.app_state import scaled
 
 
 def filter_duplicate_points(points: List[Tuple[float, float]], tol: float = 1e-9) -> List[Tuple[float, float]]:
@@ -132,7 +136,7 @@ def show_export_dialog(
     callback = None
 ):
     """
-    Show file export dialog.
+    Show native file export dialog.
 
     Args:
         default_name: Default filename without extension
@@ -144,89 +148,58 @@ def show_export_dialog(
     if formats is None:
         formats = [".sldcrv", ".dxf"]
 
-    if dpg.does_item_exist("export_dialog"):
-        dpg.delete_item("export_dialog")
-
     # Default export directory
-    export_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "exports")
-    os.makedirs(export_dir, exist_ok=True)
+    default_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "exports")
+    os.makedirs(default_dir, exist_ok=True)
 
-    def on_export():
-        filename = dpg.get_value("export_filename")
-        format_idx = dpg.get_value("export_format")
-        ext = formats[format_idx]
+    # Build file type tuples for tkinter
+    filetypes = []
+    for fmt in formats:
+        label = fmt.upper().replace(".", "") + " files"
+        filetypes.append((label, f"*{fmt}"))
+    filetypes.append(("All files", "*.*"))
 
-        if not filename or not filename.strip():
-            dpg.configure_item("export_status", default_value="Please enter a filename", color=(255, 100, 100))
-            return
+    # Create hidden tkinter root window
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes('-topmost', True)  # Bring dialog to front
 
-        # Add extension if not present
-        if not filename.endswith(ext):
-            filename = filename + ext
+    # Show native save dialog
+    filepath = filedialog.asksaveasfilename(
+        initialdir=default_dir,
+        initialfile=default_name + formats[0],
+        defaultextension=formats[0],
+        filetypes=filetypes,
+        title="Export Curve"
+    )
 
-        filepath = os.path.join(export_dir, filename)
+    root.destroy()
 
-        # Check for overwrite
-        if os.path.exists(filepath):
-            dpg.configure_item("export_status", default_value=f"Overwriting...", color=(255, 200, 100))
+    if not filepath:
+        # User cancelled
+        if callback:
+            callback(False, "", 0, 0)
+        return
 
-        success, count, removed = export_points(filepath, points, closed)
+    # Ensure correct extension
+    ext = os.path.splitext(filepath)[1].lower()
+    if ext not in formats:
+        filepath = filepath + formats[0]
 
-        if success:
-            msg = f"Exported {count} points"
-            if removed > 0:
-                msg += f" ({removed} duplicates removed)"
-            dpg.configure_item("export_status", default_value=msg, color=(100, 255, 100))
+    success, count, removed = export_points(filepath, points, closed)
 
-            if callback:
-                callback(True, filepath, count, removed)
+    if success:
+        msg = f"Exported {count} points to {os.path.basename(filepath)}"
+        if removed > 0:
+            msg += f" ({removed} duplicates removed)"
+        print(msg)
 
-            # Close after brief display
-            dpg.split_frame()
-            dpg.delete_item("export_dialog")
-        else:
-            dpg.configure_item("export_status", default_value="Export failed!", color=(255, 100, 100))
-            if callback:
-                callback(False, filepath, 0, 0)
-
-    with dpg.window(
-        label="Export Curve",
-        tag="export_dialog",
-        modal=True,
-        width=400,
-        height=220,
-        pos=(dpg.get_viewport_width() // 2 - 200, dpg.get_viewport_height() // 2 - 110),
-        no_resize=True,
-        no_collapse=True,
-    ):
-        dpg.add_text(f"Export {len(points)} points", color=(180, 180, 255))
-        dpg.add_spacer(height=10)
-
-        dpg.add_text("Filename:")
-        dpg.add_input_text(
-            tag="export_filename",
-            default_value=default_name,
-            width=-1,
-            on_enter=True,
-            callback=lambda: on_export()
-        )
-
-        dpg.add_spacer(height=10)
-        dpg.add_text("Format:")
-        dpg.add_combo(
-            items=formats,
-            tag="export_format",
-            default_value=formats[0],
-            width=-1
-        )
-
-        dpg.add_spacer(height=15)
-        with dpg.group(horizontal=True):
-            dpg.add_button(label="Export", callback=on_export, width=120)
-            dpg.add_button(label="Cancel", callback=lambda: dpg.delete_item("export_dialog"), width=120)
-
-        dpg.add_spacer(height=5)
-        dpg.add_text("", tag="export_status", color=(150, 150, 150))
+        if callback:
+            callback(True, filepath, count, removed)
+    else:
+        print(f"Export failed: {filepath}")
+        if callback:
+            callback(False, filepath, 0, 0)
 
 
 def quick_export(filepath: str, points: List[Tuple[float, float]], closed: bool = True) -> Tuple[bool, str]:

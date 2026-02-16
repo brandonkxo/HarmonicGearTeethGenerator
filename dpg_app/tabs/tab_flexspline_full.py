@@ -236,19 +236,22 @@ def _update_outputs(result, params):
     chain = result.get("chain_xy", [])
     rm = result.get("rm", 0)
     ds = result.get("ds", 0)
+    s = result.get("s", 0)
     ha = params["ha"]
     hf = params["hf"]
 
     # Calculate reference radii
     r_ded = rm + ds
     r_add = rm + ds + hf + ha
+    rb = rm - (s - ds)  # inner radius of flexspline
 
     values = {
-        "s": result.get("s", 0),
+        "s": s,
         "t": result.get("t", 0),
         "ds": ds,
         "rp": result.get("rp", 0),
         "rm": rm,
+        "rb": rb,
         "r_add": r_add,
         "r_ded": r_ded,
         "ha": ha,
