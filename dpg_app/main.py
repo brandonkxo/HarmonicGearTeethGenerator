@@ -9,6 +9,21 @@ import sys
 import os
 import ctypes
 
+def set_windows_dark_titlebar():
+    """Enable dark mode for the window title bar on Windows 10/11."""
+    if sys.platform != "win32":
+        return
+    try:
+        hwnd = ctypes.windll.user32.GetActiveWindow()
+        DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+        value = ctypes.c_int(1)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
+            ctypes.byref(value), ctypes.sizeof(value)
+        )
+    except Exception:
+        pass
+
 # Get DPI scale factor and enable DPI awareness on Windows
 _dpi_scale = 1.0
 if sys.platform == "win32":
@@ -219,6 +234,9 @@ def main():
     # Setup and show viewport
     dpg.setup_dearpygui()
     dpg.show_viewport()
+
+    # Enable dark title bar on Windows
+    set_windows_dark_titlebar()
 
     # Update status
     update_status("Ready")
