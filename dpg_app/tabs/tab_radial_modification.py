@@ -35,8 +35,10 @@ _debug_mode = False
 _first_update = True
 _debug_fs_tooth = None  # Store debug tooth data for dmax calculation
 _debug_cs_tooth = None
+_debug_fs_addendum = None  # AB segment + addendum arc (for dmax_y calculation)
 _trimmed_fs_tooth = None  # Full tooth after dmax trim (if applied)
-_last_dmax = 0.0  # Store last calculated dmax
+_last_dmax_x = 0.0  # Store last calculated dmax in X direction
+_last_dmax_y = 0.0  # Store last calculated dmax in Y direction
 
 
 def create_tab_radial_modification():
@@ -305,7 +307,7 @@ def _toggle_debug_mode():
 
 def _draw_debug_tooth():
     """Draw single tooth of each gear without fillets for debugging."""
-    global _debug_fs_tooth, _debug_cs_tooth
+    global _debug_fs_tooth, _debug_cs_tooth, _debug_fs_addendum
 
     if _last_fs is None or _last_smoothed_flank is None:
         update_info_text("tab_ov", "Click Update first to compute gears.", color=(255, 200, 100))
@@ -314,6 +316,7 @@ def _draw_debug_tooth():
     _clear_plot_series()
     _debug_fs_tooth = None
     _debug_cs_tooth = None
+    _debug_fs_addendum = None
 
     params = AppState.read_from_widgets("tab_ov")
     y_axis = "tab_ov_y"
@@ -355,6 +358,12 @@ def _draw_debug_tooth():
 
         # Store for dmax calculation
         _debug_fs_tooth = fs_tooth
+
+        # Store addendum segment (AB) for dmax_y calculation
+        # This is the top part of the tooth (highest Y values)
+        ab_right = [tooth_point_deformed(x, y) for x, y in pts_AB]
+        ab_left = [tooth_point_deformed(-x, y) for x, y in pts_AB]
+        _debug_fs_addendum = {"right": ab_right, "left": ab_left}
 
         # Close the tooth
         if fs_tooth:
@@ -414,12 +423,12 @@ def _draw_debug_tooth():
 
 
 def _calculate_dmax():
-    """Calculate maximum interference dmax.
+    """Calculate maximum interference dmax_x and dmax_y.
 
-    Measures X-axis distance from circular spline tooth points
-    to the flexspline tooth boundary (all segments).
+    dmax_x: X-axis penetration from CS into FS (all segments)
+    dmax_y: Y-axis penetration from CS into FS addendum (AB segment)
     """
-    global _last_dmax
+    global _last_dmax_x, _last_dmax_y
 
     if _debug_fs_tooth is None or _debug_cs_tooth is None:
         update_info_text("tab_ov", "Click 'Debug Single Tooth' first.", color=(255, 200, 100))
@@ -448,9 +457,7 @@ def _calculate_dmax():
         """Find X value on flank at given Y by linear interpolation."""
         if not flank_points:
             return None
-        # Sort by Y
         sorted_pts = sorted(flank_points, key=lambda p: p[1])
-        # Find bracketing points
         for i in range(len(sorted_pts) - 1):
             y1, y2 = sorted_pts[i][1], sorted_pts[i + 1][1]
             if y1 <= target_y <= y2 or y2 <= target_y <= y1:
@@ -461,56 +468,105 @@ def _calculate_dmax():
                 return x1 + t * (x2 - x1)
         return None
 
-    # Calculate dmax: find maximum X-penetration of CS into FS tooth
-    dmax = 0.0
-    interference_count = 0
+    def interpolate_y_at_x(flank_points, target_x):
+        """Find Y value on flank at given X by linear interpolation."""
+        if not flank_points:
+            return None
+        sorted_pts = sorted(flank_points, key=lambda p: p[0])
+        for i in range(len(sorted_pts) - 1):
+            x1, x2 = sorted_pts[i][0], sorted_pts[i + 1][0]
+            if x1 <= target_x <= x2 or x2 <= target_x <= x1:
+                y1, y2 = sorted_pts[i][1], sorted_pts[i + 1][1]
+                if abs(x2 - x1) < 1e-9:
+                    return (y1 + y2) / 2
+                t = (target_x - x1) / (x2 - x1)
+                return y1 + t * (y2 - y1)
+        return None
+
+    # === Calculate dmax_x: X-penetration of CS into FS tooth ===
+    dmax_x = 0.0
+    interference_count_x = 0
 
     for cs_x, cs_y in cs_points:
-        # Only check points within FS tooth Y range
         if cs_y < fs_y_min or cs_y > fs_y_max:
             continue
 
-        # Get FS boundary at this Y level
         fs_left_x = interpolate_x_at_y(fs_left, cs_y)
         fs_right_x = interpolate_x_at_y(fs_right, cs_y)
 
         if fs_left_x is None or fs_right_x is None:
             continue
 
-        # Check for interference:
-        # CS point penetrates if it's inside the FS tooth boundary
-
-        # For the right side (positive X): CS penetrates if X < FS right boundary
+        # Right side: CS penetrates if X < FS right boundary
         if cs_x > 0 and cs_x < fs_right_x:
             penetration = fs_right_x - cs_x
-            if penetration > dmax:
-                dmax = penetration
-            interference_count += 1
+            if penetration > dmax_x:
+                dmax_x = penetration
+            interference_count_x += 1
 
-        # For the left side (negative X): CS penetrates if X > FS left boundary
+        # Left side: CS penetrates if X > FS left boundary
         if cs_x < 0 and cs_x > fs_left_x:
             penetration = cs_x - fs_left_x
-            if penetration > dmax:
-                dmax = penetration
-            interference_count += 1
+            if penetration > dmax_x:
+                dmax_x = penetration
+            interference_count_x += 1
 
-    _last_dmax = dmax
+    # === Calculate dmax_y: Y-penetration of CS into FS addendum ===
+    dmax_y = 0.0
+    interference_count_y = 0
 
-    # Show popup dialog with result
-    _show_dmax_popup(dmax, interference_count)
+    if _debug_fs_addendum is not None:
+        ab_right = _debug_fs_addendum["right"]
+        ab_left = _debug_fs_addendum["left"]
+
+        # Combine addendum points and find the addendum "top" boundary
+        # The addendum is the highest Y region of the tooth
+        all_addendum = ab_right + ab_left
+
+        if all_addendum:
+            # Get X range of addendum
+            add_x_min = min(p[0] for p in all_addendum)
+            add_x_max = max(p[0] for p in all_addendum)
+
+            for cs_x, cs_y in cs_points:
+                # Only check CS points within addendum X range
+                if cs_x < add_x_min or cs_x > add_x_max:
+                    continue
+
+                # Find FS addendum Y at this X position
+                if cs_x >= 0:
+                    fs_add_y = interpolate_y_at_x(ab_right, cs_x)
+                else:
+                    fs_add_y = interpolate_y_at_x(ab_left, cs_x)
+
+                if fs_add_y is None:
+                    continue
+
+                # CS penetrates addendum if CS_Y > FS addendum Y (CS is above FS)
+                if cs_y > fs_add_y:
+                    penetration = cs_y - fs_add_y
+                    if penetration > dmax_y:
+                        dmax_y = penetration
+                    interference_count_y += 1
+
+    _last_dmax_x = dmax_x
+    _last_dmax_y = dmax_y
+
+    # Show popup dialog with results
+    _show_dmax_popup(dmax_x, interference_count_x, dmax_y, interference_count_y)
 
 
-def _show_dmax_popup(dmax: float, interference_count: int):
-    """Show popup dialog with dmax result and trim option."""
+def _show_dmax_popup(dmax_x: float, count_x: int, dmax_y: float, count_y: int):
+    """Show popup dialog with dmax results and trim options."""
     # Clean up existing popup
     if dpg.does_item_exist("dmax_popup"):
         dpg.delete_item("dmax_popup")
 
-    window_width = scaled(350)
-    window_height = scaled(180)
+    window_width = scaled(400)
+    window_height = scaled(280)
 
     with dpg.window(
-        label="dmax Calculation Result",
+        label="dmax Calculation Results",
         tag="dmax_popup",
         modal=True,
         width=window_width,
@@ -523,28 +579,72 @@ def _show_dmax_popup(dmax: float, interference_count: int):
     ):
         dpg.add_spacer(height=10)
 
-        if dmax > 0:
-            dpg.add_text(f"dmax = {dmax:.4f} mm", color=(255, 200, 100))
-            dpg.add_text(f"({interference_count} interference points)", color=(180, 180, 180))
-            dpg.add_spacer(height=15)
-            dpg.add_text("Do you want to trim the flexspline by dmax?")
-            dpg.add_spacer(height=15)
+        has_interference = dmax_x > 0 or dmax_y > 0
+
+        # Display dmax_x result
+        if dmax_x > 0:
+            dpg.add_text(f"dmax_x = {dmax_x:.4f} mm", color=(255, 200, 100))
+            dpg.add_text(f"  ({count_x} interference points, all segments)", color=(180, 180, 180))
+        else:
+            dpg.add_text("dmax_x = 0 (no X interference)", color=(100, 255, 100))
+
+        dpg.add_spacer(height=5)
+
+        # Display dmax_y result
+        if dmax_y > 0:
+            dpg.add_text(f"dmax_y = {dmax_y:.4f} mm", color=(255, 200, 100))
+            dpg.add_text(f"  ({count_y} interference points, addendum only)", color=(180, 180, 180))
+        else:
+            dpg.add_text("dmax_y = 0 (no Y interference)", color=(100, 255, 100))
+
+        dpg.add_spacer(height=15)
+
+        if has_interference:
+            dpg.add_text("Select trim options:")
+            dpg.add_spacer(height=10)
+
+            # Checkbox for dmax_x trim
+            with dpg.group(horizontal=True):
+                dpg.add_checkbox(
+                    label="",
+                    tag="chk_trim_x",
+                    default_value=dmax_x > 0
+                )
+                if dmax_x > 0:
+                    dpg.add_text(f"Trim X by dmax_x ({dmax_x:.4f} mm)")
+                else:
+                    dpg.add_text("Trim X by dmax_x (no interference)", color=(120, 120, 120))
+
+            dpg.add_spacer(height=5)
+
+            # Checkbox for dmax_y trim
+            with dpg.group(horizontal=True):
+                dpg.add_checkbox(
+                    label="",
+                    tag="chk_trim_y",
+                    default_value=dmax_y > 0
+                )
+                if dmax_y > 0:
+                    dpg.add_text(f"Trim Y by dmax_y ({dmax_y:.4f} mm)")
+                else:
+                    dpg.add_text("Trim Y by dmax_y (no interference)", color=(120, 120, 120))
+
+            dpg.add_spacer(height=20)
 
             with dpg.group(horizontal=True):
                 dpg.add_button(
-                    label="Yes, Trim",
-                    callback=lambda: _apply_trim(dmax),
+                    label="Submit",
+                    callback=lambda: _apply_trim_options(dmax_x, dmax_y),
                     width=scaled(100)
                 )
                 dpg.add_spacer(width=20)
                 dpg.add_button(
-                    label="No",
+                    label="Cancel",
                     callback=lambda: dpg.delete_item("dmax_popup"),
                     width=scaled(80)
                 )
         else:
-            dpg.add_text("dmax = 0", color=(100, 255, 100))
-            dpg.add_text("No interference detected.", color=(180, 180, 180))
+            dpg.add_text("No interference detected.", color=(100, 255, 100))
             dpg.add_spacer(height=20)
             dpg.add_button(
                 label="OK",
@@ -553,10 +653,11 @@ def _show_dmax_popup(dmax: float, interference_count: int):
             )
 
 
-def _apply_trim(dmax: float):
-    """Apply dmax trim to the flexspline tooth.
+def _apply_trim_options(dmax_x: float, dmax_y: float):
+    """Apply selected trim options to the flexspline tooth.
 
-    Moves all tooth points inward (reduces X magnitude) by dmax.
+    dmax_x: Moves tooth points inward in X (reduces X magnitude)
+    dmax_y: Moves addendum points down in Y (reduces Y value)
     """
     global _trimmed_fs_tooth
 
@@ -564,17 +665,41 @@ def _apply_trim(dmax: float):
         dpg.delete_item("dmax_popup")
         return
 
-    # Trim tooth: move points inward by dmax
-    # For right flank (positive X): subtract dmax from X
-    # For left flank (negative X): add dmax to X
+    # Read checkbox values
+    trim_x = dpg.get_value("chk_trim_x") if dpg.does_item_exist("chk_trim_x") else False
+    trim_y = dpg.get_value("chk_trim_y") if dpg.does_item_exist("chk_trim_y") else False
+
+    if not trim_x and not trim_y:
+        dpg.delete_item("dmax_popup")
+        update_info_text("tab_ov", "No trim options selected.", color=(180, 180, 180))
+        return
+
+    # Get the addendum Y threshold (minimum Y of addendum points)
+    # Points above this threshold are in the addendum region
+    addendum_y_threshold = None
+    if _debug_fs_addendum is not None and trim_y:
+        all_addendum = _debug_fs_addendum["right"] + _debug_fs_addendum["left"]
+        if all_addendum:
+            addendum_y_threshold = min(p[1] for p in all_addendum)
+
+    # Apply trims
     trimmed = []
     for x, y in _debug_fs_tooth:
-        if x > 0:
-            trimmed.append((x - dmax, y))
-        elif x < 0:
-            trimmed.append((x + dmax, y))
-        else:
-            trimmed.append((x, y))  # Points on centerline stay
+        new_x, new_y = x, y
+
+        # Apply X trim (all points)
+        if trim_x and dmax_x > 0:
+            if x > 0:
+                new_x = x - dmax_x
+            elif x < 0:
+                new_x = x + dmax_x
+
+        # Apply Y trim (addendum points only)
+        if trim_y and dmax_y > 0 and addendum_y_threshold is not None:
+            if y >= addendum_y_threshold:
+                new_y = y - dmax_y
+
+        trimmed.append((new_x, new_y))
 
     _trimmed_fs_tooth = trimmed
 
@@ -584,7 +709,15 @@ def _apply_trim(dmax: float):
     # Redraw debug view with trimmed tooth
     _redraw_debug_with_trimmed_tooth()
 
-    update_info_text("tab_ov", f"Flexspline trimmed by dmax = {dmax:.4f} mm", color=(100, 255, 100))
+    # Build status message
+    msg_parts = []
+    if trim_x and dmax_x > 0:
+        msg_parts.append(f"X by {dmax_x:.4f}")
+    if trim_y and dmax_y > 0:
+        msg_parts.append(f"Y by {dmax_y:.4f}")
+
+    msg = "Flexspline trimmed: " + ", ".join(msg_parts) + " mm"
+    update_info_text("tab_ov", msg, color=(100, 255, 100))
 
 
 def _redraw_debug_with_trimmed_tooth():
