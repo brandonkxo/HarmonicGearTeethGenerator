@@ -37,6 +37,7 @@ _first_update = True
 _debug_fs_tooth = None  # Store debug tooth data for dmax calculation
 _debug_cs_tooth = None
 _debug_fs_addendum = None  # AB segment + addendum arc (for dmax_y calculation)
+_debug_segment_info = None  # Store segment lengths for index-based trim
 _trimmed_fs_tooth = None  # Full tooth after dmax trim (if applied)
 _last_dmax_x = 0.0  # Store last calculated dmax in X direction
 _last_dmax_y = 0.0  # Store last calculated dmax in Y direction
@@ -477,7 +478,7 @@ def _draw_overlay_with_dmax():
 
 def _draw_debug_tooth():
     """Draw single tooth of each gear without fillets for debugging."""
-    global _debug_fs_tooth, _debug_cs_tooth, _debug_fs_addendum
+    global _debug_fs_tooth, _debug_cs_tooth, _debug_fs_addendum, _debug_segment_info
 
     if _last_fs is None or _last_smoothed_flank is None:
         update_info_text("tab_ov", "Click Update first to compute gears.", color=(255, 200, 100))
@@ -487,6 +488,7 @@ def _draw_debug_tooth():
     _debug_fs_tooth = None
     _debug_cs_tooth = None
     _debug_fs_addendum = None
+    _debug_segment_info = None
 
     params = AppState.read_from_widgets("tab_ov")
     y_axis = "tab_ov_y"
@@ -503,6 +505,12 @@ def _draw_debug_tooth():
         pts_AB = profile["pts_AB"]
         pts_BC = profile["pts_BC"]
         pts_CD = profile["pts_CD"]
+
+        # Store segment lengths for index-based dmax_y application
+        n_AB = len(pts_AB)
+        n_BC = len(pts_BC)
+        n_CD = len(pts_CD)
+        n_flank = n_AB + n_BC + n_CD
 
         # Combine into right flank (addendum to dedendum)
         right_flank = list(pts_AB) + list(pts_BC) + list(pts_CD)
@@ -528,6 +536,24 @@ def _draw_debug_tooth():
 
         # Store for dmax calculation
         _debug_fs_tooth = fs_tooth
+
+        # Store segment info for index-based trim
+        # fs_tooth structure: [left_flank (CD_rev + BC_rev + AB_rev mirrored)] + [right_flank (AB + BC + CD)]
+        # AB indices in left_flank: from (n_CD + n_BC) to (n_flank - 1) (these are mirrored/reversed)
+        # AB indices in right_flank: from 0 to (n_AB - 1)
+        # In combined fs_tooth:
+        #   left AB: indices n_CD + n_BC to n_flank - 1
+        #   right AB: indices n_flank to n_flank + n_AB - 1
+        _debug_segment_info = {
+            "n_AB": n_AB,
+            "n_BC": n_BC,
+            "n_CD": n_CD,
+            "n_flank": n_flank,
+            "left_ab_start": n_CD + n_BC,
+            "left_ab_end": n_flank,  # exclusive
+            "right_ab_start": n_flank,
+            "right_ab_end": n_flank + n_AB  # exclusive
+        }
 
         # Store addendum segment (AB) for dmax_y calculation
         # This is the top part of the tooth (highest Y values)
@@ -827,7 +853,7 @@ def _apply_trim_options(dmax_x: float, dmax_y: float):
     """Apply selected trim options to the flexspline tooth.
 
     dmax_x: Moves tooth points inward in X (reduces X magnitude)
-    dmax_y: Moves addendum points down in Y (reduces Y value)
+    dmax_y: Lowers the addendum line and trims AB points above it
     """
     global _trimmed_fs_tooth
 
@@ -844,34 +870,120 @@ def _apply_trim_options(dmax_x: float, dmax_y: float):
         update_info_text("tab_ov", "No trim options selected.", color=(180, 180, 180))
         return
 
-    # Get the addendum Y threshold (minimum Y of addendum points)
-    # Points above this threshold are in the addendum region
-    addendum_y_threshold = None
-    if _debug_fs_addendum is not None and trim_y:
-        all_addendum = _debug_fs_addendum["right"] + _debug_fs_addendum["left"]
-        if all_addendum:
-            addendum_y_threshold = min(p[1] for p in all_addendum)
-
-    # Apply trims
-    trimmed = []
+    # First apply X trim to all points
+    working_points = []
     for x, y in _debug_fs_tooth:
-        new_x, new_y = x, y
-
-        # Apply X trim (all points)
+        new_x = x
         if trim_x and dmax_x > 0:
             if x > 0:
                 new_x = x - dmax_x
             elif x < 0:
                 new_x = x + dmax_x
+        working_points.append((new_x, y))
 
-        # Apply Y trim (addendum points only)
-        if trim_y and dmax_y > 0 and addendum_y_threshold is not None:
-            if y >= addendum_y_threshold:
-                new_y = y - dmax_y
+    # Apply Y trim by lowering addendum and trimming AB points above it
+    if trim_y and dmax_y > 0 and _debug_segment_info is not None:
+        # Find original addendum Y (max Y of tooth)
+        original_addendum_y = max(p[1] for p in working_points)
+        new_addendum_y = original_addendum_y - dmax_y
 
-        trimmed.append((new_x, new_y))
+        # Get AB index ranges
+        left_ab_start = _debug_segment_info["left_ab_start"]
+        left_ab_end = _debug_segment_info["left_ab_end"]
+        right_ab_start = _debug_segment_info["right_ab_start"]
+        right_ab_end = _debug_segment_info["right_ab_end"]
 
-    _trimmed_fs_tooth = trimmed
+        # Build trimmed tooth:
+        # - Keep non-AB points as-is
+        # - For AB points, keep only those below new addendum line
+        # - Add horizontal addendum line connecting left and right AB at new Y
+
+        # Extract left flank (before right flank starts)
+        n_flank = _debug_segment_info["n_flank"]
+        left_flank_pts = working_points[:n_flank]
+        right_flank_pts = working_points[n_flank:]
+
+        # Process left flank: keep points, but trim AB points above new addendum
+        # Left flank structure: CD_rev + BC_rev + AB_rev (mirrored)
+        # AB is at indices left_ab_start to left_ab_end
+        trimmed_left = []
+        left_ab_rightmost = None  # The point where we'll connect the addendum line
+        for i, (x, y) in enumerate(left_flank_pts):
+            if i >= left_ab_start and i < left_ab_end:
+                # This is an AB point - keep if below new addendum
+                if y <= new_addendum_y:
+                    trimmed_left.append((x, y))
+                    # Track the last (rightmost in terms of index) AB point we keep
+                    left_ab_rightmost = (x, y)
+                else:
+                    # Point is above new addendum - find intersection if needed
+                    if left_ab_rightmost is None and i > left_ab_start:
+                        # Interpolate to find intersection with new addendum line
+                        prev_x, prev_y = left_flank_pts[i - 1]
+                        if prev_y <= new_addendum_y < y or y < new_addendum_y <= prev_y:
+                            t = (new_addendum_y - prev_y) / (y - prev_y) if abs(y - prev_y) > 1e-9 else 0
+                            intersect_x = prev_x + t * (x - prev_x)
+                            trimmed_left.append((intersect_x, new_addendum_y))
+                            left_ab_rightmost = (intersect_x, new_addendum_y)
+            else:
+                trimmed_left.append((x, y))
+
+        # If we didn't find an intersection point, add one at the last kept AB point's X
+        if left_ab_rightmost is None and len(trimmed_left) > 0:
+            # Use the last point of left flank
+            left_ab_rightmost = trimmed_left[-1]
+
+        # Process right flank: AB is at start (indices 0 to n_AB-1)
+        n_AB = _debug_segment_info["n_AB"]
+        trimmed_right = []
+        right_ab_leftmost = None  # The point where we'll connect the addendum line
+
+        # First, find where AB intersects the new addendum line (going from top down)
+        for i in range(n_AB):
+            x, y = right_flank_pts[i]
+            if y <= new_addendum_y:
+                # First point at or below new addendum
+                if right_ab_leftmost is None and i > 0:
+                    # Interpolate to find intersection
+                    prev_x, prev_y = right_flank_pts[i - 1]
+                    if prev_y > new_addendum_y >= y:
+                        t = (new_addendum_y - prev_y) / (y - prev_y) if abs(y - prev_y) > 1e-9 else 0
+                        intersect_x = prev_x + t * (x - prev_x)
+                        right_ab_leftmost = (intersect_x, new_addendum_y)
+                        trimmed_right.append((intersect_x, new_addendum_y))
+                trimmed_right.append((x, y))
+            elif right_ab_leftmost is not None:
+                # Already past the addendum line, keep remaining points
+                trimmed_right.append((x, y))
+            # else: point is above new addendum and we haven't crossed yet - skip
+
+        # Add remaining right flank points (BC + CD)
+        for i in range(n_AB, len(right_flank_pts)):
+            trimmed_right.append(right_flank_pts[i])
+
+        # Build final trimmed tooth with addendum line
+        trimmed = []
+
+        # Add trimmed left flank
+        trimmed.extend(trimmed_left)
+
+        # Add horizontal addendum line from left AB to right AB
+        if left_ab_rightmost is not None and right_ab_leftmost is not None:
+            # Interpolate points along the addendum line
+            x_left = left_ab_rightmost[0]
+            x_right = right_ab_leftmost[0]
+            n_addendum_pts = 10
+            for j in range(1, n_addendum_pts):
+                frac = j / n_addendum_pts
+                x_add = x_left + frac * (x_right - x_left)
+                trimmed.append((x_add, new_addendum_y))
+
+        # Add trimmed right flank
+        trimmed.extend(trimmed_right)
+
+        _trimmed_fs_tooth = trimmed
+    else:
+        _trimmed_fs_tooth = working_points
 
     # Close popup
     dpg.delete_item("dmax_popup")

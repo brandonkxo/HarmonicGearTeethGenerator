@@ -1585,41 +1585,39 @@ def build_dmax_deformed_flexspline(params: dict,
                 modified.append((x, y))
         return modified
 
-    # Apply dmax_y: shift addendum (AB) down in Y
-    def apply_dmax_y_to_ab(pts, dmax):
-        if dmax <= 0:
-            return list(pts)
-        return [(x, y - dmax) for x, y in pts]
-
-    # Apply modifications
-    pts_AB = apply_dmax_x(apply_dmax_y_to_ab(pts_AB_raw, dmax_y), dmax_x)
+    # Apply dmax_x only - dmax_y is handled by lowering the addendum line
+    # and recalculating fillet tangency (NOT by shifting AB points)
+    pts_AB = apply_dmax_x(list(pts_AB_raw), dmax_x)
     pts_BC = apply_dmax_x(list(pts_BC_raw), dmax_x)
     pts_CD = apply_dmax_x(list(pts_CD_raw), dmax_x)
 
-    # Adjust circle centers for dmax
+    # Adjust AB circle center for dmax_x only (NOT dmax_y)
     x1_R_mod = x1_R - dmax_x if dmax_x > 0 else x1_R
-    y1_R_mod = y1_R - dmax_y if dmax_y > 0 else y1_R
+    # y1_R stays the same - the AB arc doesn't move down
 
-    # Addendum height in local coords (after dmax_y)
+    # Addendum height: original minus dmax_y (lowered addendum line)
     y_add = ds + hf + ha - dmax_y
 
-    # Solve for fillet center (tangent to modified AB circle and horizontal addendum)
+    # Solve for fillet center (tangent to ORIGINAL AB circle and LOWERED addendum)
+    # The fillet circle is tangent to:
+    #   - Horizontal line at y = y_add (lowered addendum)
+    #   - The AB circle centered at (x1_R_mod, y1_R) with radius r1
     cy_fillet = y_add - r_fillet_add
-    dy = cy_fillet - y1_R_mod
+    dy = cy_fillet - y1_R  # Use original y1_R, not shifted
     r_inner = r1 - r_fillet_add
     dx_sq = r_inner**2 - dy**2
     if dx_sq < 0:
         dx_sq = 0
     cx_fillet = x1_R_mod + math.sqrt(dx_sq)
 
-    # Tangent point on AB arc
-    dist_to_fillet = math.sqrt((cx_fillet - x1_R_mod)**2 + (cy_fillet - y1_R_mod)**2)
+    # Tangent point on AB arc (on the original circle)
+    dist_to_fillet = math.sqrt((cx_fillet - x1_R_mod)**2 + (cy_fillet - y1_R)**2)
     if dist_to_fillet > 1e-9:
         dir_x = (cx_fillet - x1_R_mod) / dist_to_fillet
-        dir_y = (cy_fillet - y1_R_mod) / dist_to_fillet
+        dir_y = (cy_fillet - y1_R) / dist_to_fillet
     else:
         dir_x, dir_y = 1, 0
-    pt_AB_trim = (x1_R_mod + r1 * dir_x, y1_R_mod + r1 * dir_y)
+    pt_AB_trim = (x1_R_mod + r1 * dir_x, y1_R + r1 * dir_y)
 
     # Tangent point on addendum
     pt_add_trim_r = (cx_fillet, y_add)
@@ -1647,10 +1645,11 @@ def build_dmax_deformed_flexspline(params: dict,
     pt_add_trim_l = (-pt_add_trim_r[0], pt_add_trim_r[1])
 
     # Trim pts_AB to remove points above fillet trim point
-    angle_trim = math.atan2(pt_AB_trim[1] - y1_R_mod, pt_AB_trim[0] - x1_R_mod)
+    # Use original y1_R for angle calculation since AB arc is not shifted
+    angle_trim = math.atan2(pt_AB_trim[1] - y1_R, pt_AB_trim[0] - x1_R_mod)
     pts_AB_trimmed = []
     for pt in pts_AB:
-        angle_pt = math.atan2(pt[1] - y1_R_mod, pt[0] - x1_R_mod)
+        angle_pt = math.atan2(pt[1] - y1_R, pt[0] - x1_R_mod)
         if angle_pt <= angle_trim + 1e-9:
             pts_AB_trimmed.append(pt)
     if pts_AB_trimmed:
