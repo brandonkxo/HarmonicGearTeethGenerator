@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from equations import (
     compute_conjugate_profile, smooth_conjugate_profile,
     build_deformed_flexspline, build_full_circular_spline,
+    build_dmax_deformed_flexspline,
     compute_profile, eq14_rho, eq21_mu, eq23_phi1, eq27_psi, eq29_transform
 )
 
@@ -39,6 +40,9 @@ _debug_fs_addendum = None  # AB segment + addendum arc (for dmax_y calculation)
 _trimmed_fs_tooth = None  # Full tooth after dmax trim (if applied)
 _last_dmax_x = 0.0  # Store last calculated dmax in X direction
 _last_dmax_y = 0.0  # Store last calculated dmax in Y direction
+_dmax_applied_to_full = False  # Track if dmax was applied to full gear view
+_applied_dmax_x = 0.0  # dmax_x value applied to full gear
+_applied_dmax_y = 0.0  # dmax_y value applied to full gear
 
 
 def create_tab_radial_modification():
@@ -131,7 +135,11 @@ def _create_plot():
 def _update_plot():
     """Update the overlay plot."""
     global _last_fs, _last_cs, _last_smoothed_flank, _last_rp_c, _trimmed_fs_tooth
+    global _dmax_applied_to_full, _last_dmax_x, _last_dmax_y
     _trimmed_fs_tooth = None  # Reset trim when updating
+    _dmax_applied_to_full = False  # Reset dmax applied state
+    _last_dmax_x = 0.0  # Reset stored dmax values
+    _last_dmax_y = 0.0
 
     params = AppState.read_from_widgets("tab_ov")
     smooth_val = AppState.get_smooth()
@@ -289,20 +297,182 @@ def _export_wave_gen():
 def _toggle_debug_mode():
     """Toggle debug single tooth view."""
     global _debug_mode, _trimmed_fs_tooth
-    _debug_mode = not _debug_mode
-
-    btn_text = "Show Full Gears" if _debug_mode else "Debug Single Tooth"
-    dpg.configure_item("btn_debug_tooth", label=btn_text)
 
     if _debug_mode:
+        # Leaving debug mode - check if we should apply dmax
+        if _last_dmax_x > 0 or _last_dmax_y > 0:
+            _show_apply_dmax_dialog()
+        else:
+            _exit_debug_mode_without_dmax()
+    else:
+        # Entering debug mode
+        _debug_mode = True
+        btn_text = "Show Full Gears"
+        dpg.configure_item("btn_debug_tooth", label=btn_text)
         _trimmed_fs_tooth = None  # Reset trim when entering debug mode
         _draw_debug_tooth()
+
+
+def _exit_debug_mode_without_dmax():
+    """Exit debug mode and show full gears without dmax applied."""
+    global _debug_mode, _trimmed_fs_tooth, _dmax_applied_to_full
+    _debug_mode = False
+    _dmax_applied_to_full = False
+    btn_text = "Debug Single Tooth"
+    dpg.configure_item("btn_debug_tooth", label=btn_text)
+    _trimmed_fs_tooth = None
+    _clear_plot_series()
+    _draw_overlay()
+    dpg.fit_axis_data("tab_ov_x")
+    dpg.fit_axis_data("tab_ov_y")
+
+
+def _show_apply_dmax_dialog():
+    """Show dialog asking if user wants to apply dmax to full flex spline."""
+    # Clean up existing dialog
+    if dpg.does_item_exist("apply_dmax_dialog"):
+        dpg.delete_item("apply_dmax_dialog")
+
+    window_width = scaled(380)
+    window_height = scaled(200)
+
+    with dpg.window(
+        label="Apply dmax to Full Gear",
+        tag="apply_dmax_dialog",
+        modal=True,
+        width=window_width,
+        height=window_height,
+        pos=(dpg.get_viewport_width() // 2 - window_width // 2,
+             dpg.get_viewport_height() // 2 - window_height // 2),
+        no_resize=True,
+        no_collapse=True,
+        on_close=lambda: _on_apply_dmax_dialog_close(False)
+    ):
+        dpg.add_spacer(height=10)
+        dpg.add_text("Apply current dmax to full flex spline?")
+        dpg.add_spacer(height=10)
+
+        # Show current dmax values
+        if _last_dmax_x > 0:
+            dpg.add_text(f"  dmax_x = {_last_dmax_x:.4f} mm", color=(255, 200, 100))
+        else:
+            dpg.add_text("  dmax_x = 0 (no X trim)", color=(120, 120, 120))
+
+        if _last_dmax_y > 0:
+            dpg.add_text(f"  dmax_y = {_last_dmax_y:.4f} mm", color=(255, 200, 100))
+        else:
+            dpg.add_text("  dmax_y = 0 (no Y trim)", color=(120, 120, 120))
+
+        dpg.add_spacer(height=20)
+
+        with dpg.group(horizontal=True):
+            dpg.add_button(
+                label="Yes",
+                callback=lambda: _on_apply_dmax_dialog_close(True),
+                width=scaled(100)
+            )
+            dpg.add_spacer(width=20)
+            dpg.add_button(
+                label="No",
+                callback=lambda: _on_apply_dmax_dialog_close(False),
+                width=scaled(100)
+            )
+
+
+def _on_apply_dmax_dialog_close(apply_dmax: bool):
+    """Handle apply dmax dialog close."""
+    global _debug_mode, _trimmed_fs_tooth, _dmax_applied_to_full
+    global _applied_dmax_x, _applied_dmax_y
+
+    # Close dialog
+    if dpg.does_item_exist("apply_dmax_dialog"):
+        dpg.delete_item("apply_dmax_dialog")
+
+    _debug_mode = False
+    btn_text = "Debug Single Tooth"
+    dpg.configure_item("btn_debug_tooth", label=btn_text)
+    _trimmed_fs_tooth = None
+
+    if apply_dmax:
+        _dmax_applied_to_full = True
+        _applied_dmax_x = _last_dmax_x
+        _applied_dmax_y = _last_dmax_y
+        _draw_overlay_with_dmax()
     else:
-        _trimmed_fs_tooth = None  # Reset trim when leaving debug mode
+        _dmax_applied_to_full = False
         _clear_plot_series()
         _draw_overlay()
-        dpg.fit_axis_data("tab_ov_x")
-        dpg.fit_axis_data("tab_ov_y")
+
+    dpg.fit_axis_data("tab_ov_x")
+    dpg.fit_axis_data("tab_ov_y")
+
+
+def _draw_overlay_with_dmax():
+    """Draw overlay with dmax applied to flexspline."""
+    global _last_fs
+
+    params = AppState.read_from_widgets("tab_ov")
+    fillet_add = AppState.get_fillet_add()
+    fillet_ded = AppState.get_fillet_ded()
+
+    _clear_plot_series()
+    y_axis = "tab_ov_y"
+
+    # Build flexspline with dmax applied
+    fs_result = build_dmax_deformed_flexspline(
+        params,
+        dmax_x=_applied_dmax_x,
+        dmax_y=_applied_dmax_y,
+        r_fillet_add=fillet_add,
+        r_fillet_ded=fillet_ded
+    )
+
+    if "error" in fs_result:
+        update_info_text("tab_ov", f"Flexspline error: {fs_result['error']}", color=(255, 100, 100))
+        return
+
+    _last_fs = fs_result
+
+    # Draw flexspline
+    chain = fs_result.get("chain_xy", [])
+    if chain:
+        x_data = [p[0] for p in chain] + [chain[0][0]]
+        y_data = [p[1] for p in chain] + [chain[0][1]]
+
+        dpg.add_line_series(
+            x_data, y_data,
+            label="Flexspline (dmax applied)",
+            tag="series_ov_fs",
+            parent=y_axis
+        )
+        dpg.bind_item_theme("series_ov_fs", "theme_line_flexspline")
+
+    # Draw circular spline (unchanged)
+    if _last_cs:
+        chain = _last_cs.get("chain_xy", [])
+        if chain:
+            x_data = [p[0] for p in chain] + [chain[0][0]]
+            y_data = [p[1] for p in chain] + [chain[0][1]]
+
+            dpg.add_line_series(
+                x_data, y_data,
+                label="Circular Spline",
+                tag="series_ov_cs",
+                parent=y_axis
+            )
+            dpg.bind_item_theme("series_ov_cs", "theme_line_circspline")
+
+    # Build status message
+    msg_parts = []
+    if _applied_dmax_x > 0:
+        msg_parts.append(f"dmax_x={_applied_dmax_x:.4f}")
+    if _applied_dmax_y > 0:
+        msg_parts.append(f"dmax_y={_applied_dmax_y:.4f}")
+
+    fs_pts = len(fs_result.get("chain_xy", []))
+    cs_pts = len(_last_cs.get("chain_xy", [])) if _last_cs else 0
+    msg = f"dmax applied: {', '.join(msg_parts)} mm | FS={fs_pts}, CS={cs_pts} pts"
+    update_info_text("tab_ov", msg, color=(100, 255, 100))
 
 
 def _draw_debug_tooth():
