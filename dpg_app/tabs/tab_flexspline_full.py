@@ -22,7 +22,6 @@ from dpg_app.export_manager import show_export_dialog
 # Module-level state
 _last_result = None
 _deformed = False
-_zoomed = False
 _first_update = True
 
 
@@ -47,21 +46,14 @@ def create_tab_flexspline_full():
                 export_formats=[".sldcrv", ".dxf"]
             )
 
-            # Toggle buttons
+            # Toggle button
             dpg.add_spacer(height=10)
-            with dpg.group(horizontal=True):
-                dpg.add_button(
-                    label="Zoom In",
-                    tag="btn_zoom_fs",
-                    callback=_toggle_zoom,
-                    width=scaled(80)
-                )
-                dpg.add_button(
-                    label="Show Deformed",
-                    tag="btn_deform_fs",
-                    callback=_toggle_deformed,
-                    width=scaled(150)
-                )
+            dpg.add_button(
+                label="Show Deformed",
+                tag="btn_deform_fs",
+                callback=_toggle_deformed,
+                width=scaled(150)
+            )
 
             create_output_panel(
                 tag_prefix="tab_fs",
@@ -143,11 +135,9 @@ def _update_plot():
     # Draw reference circles
     _draw_reference_circles(result, params, y_axis)
 
-    # Set axis limits based on zoom state (only fit on first update)
+    # Fit axis on first update
     global _first_update
-    if _zoomed:
-        _set_zoomed_view(result)
-    elif _first_update:
+    if _first_update:
         dpg.fit_axis_data("tab_fs_x")
         dpg.fit_axis_data("tab_fs_y")
         _first_update = False
@@ -218,19 +208,6 @@ def _draw_reference_circles(result, params, y_axis):
             dpg.bind_item_theme(tag, theme)
 
 
-def _set_zoomed_view(result):
-    """Set axis limits for 4-tooth zoomed view."""
-    rp = result.get("rp", 25)
-    z_f = int(AppState.get_param("z_f"))
-    tooth_angle = 2 * math.pi / z_f
-
-    # Show ~4 teeth centered at angle 0
-    half_view = rp * 2 * tooth_angle
-
-    dpg.set_axis_limits("tab_fs_x", -half_view * 0.5, half_view * 1.5)
-    dpg.set_axis_limits("tab_fs_y", rp - half_view * 0.5, rp + half_view * 0.5)
-
-
 def _update_outputs(result, params):
     """Update output panel."""
     chain = result.get("chain_xy", [])
@@ -260,22 +237,6 @@ def _update_outputs(result, params):
         "chain_points": len(chain),
     }
     update_output_values("tab_fs", values)
-
-
-def _toggle_zoom():
-    """Toggle zoom state."""
-    global _zoomed
-    _zoomed = not _zoomed
-
-    btn_text = "Zoom Out" if _zoomed else "Zoom In"
-    dpg.configure_item("btn_zoom_fs", label=btn_text)
-
-    if _last_result:
-        if _zoomed:
-            _set_zoomed_view(_last_result)
-        else:
-            dpg.fit_axis_data("tab_fs_x")
-            dpg.fit_axis_data("tab_fs_y")
 
 
 def _toggle_deformed():

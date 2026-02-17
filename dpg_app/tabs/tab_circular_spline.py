@@ -23,7 +23,6 @@ from dpg_app.export_manager import show_export_dialog
 
 # Module-level state
 _last_result = None
-_zoomed = False
 _first_update = True
 
 
@@ -46,15 +45,6 @@ def create_tab_circular_spline():
                 include_export=True,
                 on_export=_export_curve,
                 export_formats=[".sldcrv", ".dxf"]
-            )
-
-            # Zoom toggle
-            dpg.add_spacer(height=10)
-            dpg.add_button(
-                label="Zoom In",
-                tag="btn_zoom_cs",
-                callback=_toggle_zoom,
-                width=scaled(80)
             )
 
             create_output_panel(
@@ -115,6 +105,7 @@ def _update_plot():
 
     result = build_full_circular_spline(
         params, smoothed_flank, rp_c,
+        n_ded_arc=100,  # Increased from default 39 for smoother export
         r_fillet_add=fillet_add, r_fillet_ded=fillet_ded
     )
 
@@ -156,9 +147,7 @@ def _update_plot():
 
     # Set view (only fit on first update)
     global _first_update
-    if _zoomed:
-        _set_zoomed_view(rp_c)
-    elif _first_update:
+    if _first_update:
         dpg.fit_axis_data("tab_cs_x")
         dpg.fit_axis_data("tab_cs_y")
         _first_update = False
@@ -205,16 +194,6 @@ def _draw_reference_circles(result, rp_c, y_axis):
         dpg.bind_item_theme(tag, theme)
 
 
-def _set_zoomed_view(rp_c):
-    """Set zoomed view for ~4 teeth."""
-    z_c = int(AppState.get_param("z_c"))
-    tooth_angle = 2 * math.pi / z_c
-    half_view = rp_c * 2 * tooth_angle
-
-    dpg.set_axis_limits("tab_cs_x", -half_view * 0.5, half_view * 1.5)
-    dpg.set_axis_limits("tab_cs_y", rp_c - half_view * 0.5, rp_c + half_view * 0.5)
-
-
 def _update_outputs(result, rp_c):
     """Update output panel."""
     chain = result.get("chain_xy", [])
@@ -233,23 +212,6 @@ def _update_outputs(result, rp_c):
         "chain_points": len(chain),
     }
     update_output_values("tab_cs", values)
-
-
-def _toggle_zoom():
-    """Toggle zoom state."""
-    global _zoomed
-    _zoomed = not _zoomed
-
-    btn_text = "Zoom Out" if _zoomed else "Zoom In"
-    dpg.configure_item("btn_zoom_cs", label=btn_text)
-
-    if _last_result:
-        rp_c = _last_result.get("rp_c", 25.5)
-        if _zoomed:
-            _set_zoomed_view(rp_c)
-        else:
-            dpg.fit_axis_data("tab_cs_x")
-            dpg.fit_axis_data("tab_cs_y")
 
 
 def _export_curve():

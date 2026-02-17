@@ -31,7 +31,6 @@ _last_cs = None
 _last_modified = None
 _d_max = 0.0
 _interference_pts = []
-_zoomed = False
 _show_deformed = True
 _modification_applied = False
 _first_update = True
@@ -60,19 +59,12 @@ def create_tab_radial_modification():
             dpg.add_separator()
             dpg.add_spacer(height=5)
 
-            with dpg.group(horizontal=True):
-                dpg.add_button(
-                    label="Zoom In",
-                    tag="btn_zoom_ov",
-                    callback=_toggle_zoom,
-                    width=scaled(80)
-                )
-                dpg.add_button(
-                    label="Show Undeformed",
-                    tag="btn_deform_ov",
-                    callback=_toggle_deformed,
-                    width=scaled(120)
-                )
+            dpg.add_button(
+                label="Show Undeformed",
+                tag="btn_deform_ov",
+                callback=_toggle_deformed,
+                width=scaled(120)
+            )
 
             dpg.add_spacer(height=10)
             dpg.add_button(
@@ -141,6 +133,8 @@ def _update_plot():
 
     params = AppState.read_from_widgets("tab_ov")
     smooth_val = AppState.get_smooth()
+    fillet_add = AppState.get_fillet_add()
+    fillet_ded = AppState.get_fillet_ded()
 
     update_info_text("tab_ov", "Computing overlay...", color=(255, 200, 100))
 
@@ -169,7 +163,11 @@ def _update_plot():
     rp_c = conj.get("rp_c", 25.5)
     smoothed_flank = smoothed.get("smoothed_flank", [])
 
-    cs_result = build_full_circular_spline(params, smoothed_flank, rp_c)
+    cs_result = build_full_circular_spline(
+        params, smoothed_flank, rp_c,
+        n_ded_arc=100,  # Match Tab 2.4 for smoother arcs
+        r_fillet_add=fillet_add, r_fillet_ded=fillet_ded
+    )
     if "error" in cs_result:
         update_info_text("tab_ov", f"Circular spline error: {cs_result['error']}", color=(255, 100, 100))
         return
@@ -185,9 +183,7 @@ def _update_plot():
 
     # Set view (only fit on first update)
     global _first_update
-    if _zoomed:
-        _set_zoomed_view(rp_c)
-    elif _first_update:
+    if _first_update:
         dpg.fit_axis_data("tab_ov_x")
         dpg.fit_axis_data("tab_ov_y")
         _first_update = False
@@ -336,17 +332,6 @@ def _calculate_modification():
     _update_outputs()
 
 
-def _set_zoomed_view(rp_c):
-    """Set zoomed view."""
-    z_f = int(AppState.get_param("z_f"))
-    rp = _last_fs.get("rp", 25) if _last_fs else 25
-    tooth_angle = 2 * math.pi / z_f
-    half_view = rp * 2 * tooth_angle
-
-    dpg.set_axis_limits("tab_ov_x", -half_view * 0.5, half_view * 1.5)
-    dpg.set_axis_limits("tab_ov_y", rp - half_view * 0.5, rp + half_view * 0.5)
-
-
 def _update_outputs():
     """Update output panel."""
     values = {
@@ -358,23 +343,6 @@ def _update_outputs():
         "interference_count": len(_interference_pts),
     }
     update_output_values("tab_ov", values)
-
-
-def _toggle_zoom():
-    """Toggle zoom."""
-    global _zoomed
-    _zoomed = not _zoomed
-
-    btn_text = "Zoom Out" if _zoomed else "Zoom In"
-    dpg.configure_item("btn_zoom_ov", label=btn_text)
-
-    if _last_cs:
-        rp_c = _last_cs.get("rp_c", 25.5)
-        if _zoomed:
-            _set_zoomed_view(rp_c)
-        else:
-            dpg.fit_axis_data("tab_ov_x")
-            dpg.fit_axis_data("tab_ov_y")
 
 
 def _toggle_deformed():
