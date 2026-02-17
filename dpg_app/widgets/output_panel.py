@@ -50,7 +50,6 @@ OUTPUT_CATEGORIES = {
     "radial_modification": {
         "Flexspline": ["z_f", "rp"],
         "Circular Spline": ["z_c", "rp_c"],
-        "Modification": ["d_max", "interference_count"],
     },
 }
 
@@ -79,8 +78,6 @@ OUTPUT_LABELS = {
     "count_AB": "Segment AB points",
     "count_BC": "Segment BC points",
     "count_CD": "Segment CD points",
-    "d_max": "Max penetration d_max",
-    "interference_count": "Interference points",
 }
 
 # Units for output values
@@ -102,7 +99,6 @@ OUTPUT_UNITS = {
     "r_ded": "mm",
     "ha": "mm",
     "hf": "mm",
-    "d_max": "mm",
 }
 
 
