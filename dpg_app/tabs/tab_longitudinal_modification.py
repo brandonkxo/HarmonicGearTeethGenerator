@@ -300,14 +300,6 @@ def create_tab_longitudinal_modification():
                     width=scaled(100)
                 )
 
-            dpg.add_spacer(height=5)
-            dpg.add_button(
-                label="Show Tooth Overlay Animation",
-                tag="btn_show_overlay",
-                callback=_show_overlay_animation,
-                width=-1
-            )
-
             dpg.add_spacer(height=10)
             dpg.add_separator()
 
