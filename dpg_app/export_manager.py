@@ -53,6 +53,22 @@ def write_sldcrv(filepath: str, points: List[Tuple[float, float]]) -> bool:
         return False
 
 
+def write_sldcrv_3d(filepath: str, points: List[Tuple[float, float, float]]) -> bool:
+    """
+    Write 3D points to SolidWorks curve format (.sldcrv).
+
+    Format: x,y,z per line (CSV)
+    """
+    try:
+        with open(filepath, "w") as f:
+            for x, y, z in points:
+                f.write(f"{x},{y},{z}\n")
+        return True
+    except Exception as e:
+        print(f"Error writing SLDCRV 3D: {e}")
+        return False
+
+
 def write_dxf_polyline(filepath: str, points: List[Tuple[float, float]], closed: bool = True) -> bool:
     """
     Write points as DXF polyline.

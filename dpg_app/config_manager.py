@@ -55,6 +55,11 @@ def save_config(name: str) -> bool:
         "fillet_ded": AppState.get_fillet_ded(),
     }
 
+    # Save tab 2.6 (longitudinal modification) parameters
+    tab26_params = _read_tab26_params()
+    if tab26_params:
+        config_data["tab26"] = tab26_params
+
     filepath = os.path.join(CONFIG_DIR, f"{safe_name}.json")
     try:
         with open(filepath, "w") as f:
@@ -63,6 +68,49 @@ def save_config(name: str) -> bool:
     except Exception as e:
         print(f"Error saving config: {e}")
         return False
+
+
+def _read_tab26_params() -> Optional[dict]:
+    """Read tab 2.6 parameters from widgets."""
+    try:
+        params = {}
+        if dpg.does_item_exist("input_l0"):
+            params["l0"] = dpg.get_value("input_l0")
+        if dpg.does_item_exist("input_li_main"):
+            params["li_main"] = dpg.get_value("input_li_main")
+        if dpg.does_item_exist("input_n_sections"):
+            params["n_sections"] = dpg.get_value("input_n_sections")
+        if dpg.does_item_exist("chk_poly_fit"):
+            params["poly_fit"] = dpg.get_value("chk_poly_fit")
+        if dpg.does_item_exist("input_poly_degree"):
+            params["poly_degree"] = dpg.get_value("input_poly_degree")
+        if dpg.does_item_exist("chk_equal_aspects"):
+            params["equal_aspects"] = dpg.get_value("chk_equal_aspects")
+        return params if params else None
+    except Exception:
+        return None
+
+
+def _apply_tab26_params(params: dict):
+    """Apply tab 2.6 parameters to widgets."""
+    try:
+        if "l0" in params and dpg.does_item_exist("input_l0"):
+            dpg.set_value("input_l0", params["l0"])
+        if "li_main" in params and dpg.does_item_exist("input_li_main"):
+            dpg.set_value("input_li_main", params["li_main"])
+        if "n_sections" in params and dpg.does_item_exist("input_n_sections"):
+            dpg.set_value("input_n_sections", params["n_sections"])
+        if "poly_fit" in params and dpg.does_item_exist("chk_poly_fit"):
+            dpg.set_value("chk_poly_fit", params["poly_fit"])
+        if "poly_degree" in params and dpg.does_item_exist("input_poly_degree"):
+            dpg.set_value("input_poly_degree", params["poly_degree"])
+        if "equal_aspects" in params and dpg.does_item_exist("chk_equal_aspects"):
+            dpg.set_value("chk_equal_aspects", params["equal_aspects"])
+            # Also apply the equal aspects setting to the plot
+            if dpg.does_item_exist("tab_longmod_plot"):
+                dpg.configure_item("tab_longmod_plot", equal_aspects=params["equal_aspects"])
+    except Exception as e:
+        print(f"Error applying tab26 params: {e}")
 
 
 def load_config(name: str) -> bool:
@@ -87,6 +135,11 @@ def load_config(name: str) -> bool:
     AppState.set_smooth(smooth)
     AppState.set_fillet_add(config_data.get("fillet_add", 0.15))
     AppState.set_fillet_ded(config_data.get("fillet_ded", 0.1))
+
+    # Load tab 2.6 parameters if present
+    tab26_params = config_data.get("tab26", None)
+    if tab26_params:
+        _apply_tab26_params(tab26_params)
 
     return True
 

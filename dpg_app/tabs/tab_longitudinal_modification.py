@@ -31,6 +31,7 @@ from dpg_app.widgets.output_panel import (
     create_info_text, update_info_text
 )
 from dpg_app.themes import COLORS
+from dpg_app.export_manager import write_sldcrv_3d
 
 # Path to reference images
 REF_IMAGES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "Ref Images")
@@ -137,10 +138,11 @@ def create_tab_longitudinal_modification():
             dpg.add_spacer(height=10)
 
             dpg.add_text(
-                "Calculates radial modification along the flexspline length. "
+                "Shows tooth tip cross-section in global radial coordinates. "
                 "The cup wall bows opposite to flex direction (Fig. 12), causing "
                 "interference on both sides of the main section. Teeth must be "
-                "shortened away from the main engagement section.",
+                "shortened away from the main engagement section. "
+                "Reference line is at the addendum circle radius.",
                 wrap=scaled(320),
                 color=(150, 150, 150)
             )
@@ -300,6 +302,16 @@ def create_tab_longitudinal_modification():
                     width=scaled(100)
                 )
 
+            dpg.add_spacer(height=5)
+
+            # Export button
+            dpg.add_button(
+                label="Export .sldcrv",
+                tag="btn_export_longmod",
+                callback=_export_sldcrv,
+                width=-1
+            )
+
             dpg.add_spacer(height=10)
             dpg.add_separator()
 
@@ -308,12 +320,18 @@ def create_tab_longitudinal_modification():
             dpg.add_text("Results", color=(180, 180, 255))
             dpg.add_spacer(height=5)
 
-            with dpg.child_window(tag="longmod_results_panel", height=scaled(120), border=False):
+            with dpg.child_window(tag="longmod_results_panel", height=scaled(200), border=False):
                 dpg.add_text("", tag="longmod_result_1", color=(200, 200, 200))
                 dpg.add_text("", tag="longmod_result_2", color=(200, 200, 200))
                 dpg.add_text("", tag="longmod_result_3", color=(200, 200, 200))
                 dpg.add_text("", tag="longmod_result_4", color=(200, 200, 200))
                 dpg.add_text("", tag="longmod_result_5", color=(200, 200, 200))
+                dpg.add_spacer(height=5)
+                dpg.add_text("Equation (SolidWorks):", tag="longmod_eq_label", color=(180, 180, 255), show=False)
+                dpg.add_text("", tag="longmod_eq_range", color=(150, 150, 150), wrap=scaled(320), show=False)
+                dpg.add_text("", tag="longmod_eq_xt", color=(200, 200, 100), wrap=scaled(320), show=False)
+                dpg.add_text("Yt = 0", tag="longmod_eq_yt", color=(200, 200, 100), show=False)
+                dpg.add_text("Zt = t", tag="longmod_eq_zt", color=(200, 200, 100), show=False)
 
             create_info_text("tab_longmod", "Click 'Calculate' to compute modification profile.")
 
@@ -584,7 +602,7 @@ def _stop_animation():
 def _create_plot():
     """Create the visualization plot."""
     with dpg.plot(
-        label="Longitudinal Modification Profile",
+        label="Longitudinal Modification Profile (Global Coordinates)",
         tag="tab_longmod_plot",
         width=-1,
         height=-1,
@@ -594,7 +612,7 @@ def _create_plot():
         dpg.add_plot_legend(location=dpg.mvPlot_Location_NorthEast)
 
         dpg.add_plot_axis(dpg.mvXAxis, label="l\u1d62 - Distance from cup bottom (mm)", tag="tab_longmod_x")
-        with dpg.plot_axis(dpg.mvYAxis, label="Radial Modification (mm)", tag="tab_longmod_y"):
+        with dpg.plot_axis(dpg.mvYAxis, label="Radial Position (mm)", tag="tab_longmod_y"):
             pass
 
 
@@ -922,11 +940,25 @@ def _calculate_modification():
     dmax_x_values = np.array(dmax_x_values)
     dmax_y_values = np.array(dmax_y_values)
 
+    # Calculate addendum radius in global coordinates
+    # rp = pitch radius, ha = addendum height
+    m = params["m"]
+    z_f = params["z_f"]
+    ha = params["ha"]
+    rp = m * z_f / 2.0  # pitch radius
+    r_addendum = rp + ha  # addendum circle radius (global)
+
+    # Convert modification to global radial coordinates
+    # Modification is measured from the addendum circle (negative = tooth shortened)
+    radial_position = r_addendum + modification_mm
+
     # Store calculation results
     _last_calculation = {
         "positions": section_positions,
         "k_values": k_values,
         "modification_mm": modification_mm,
+        "radial_position": radial_position,
+        "r_addendum": r_addendum,
         "dmax_x_values": dmax_x_values,
         "dmax_y_values": dmax_y_values,
         "l0": l0,
@@ -942,27 +974,45 @@ def _calculate_modification():
 
     y_axis = "tab_longmod_y"
 
-    # Plot discrete modification values (in mm)
-    dpg.add_stem_series(
-        section_positions.tolist(),
-        modification_mm.tolist(),
-        label="Section Modification",
+    # Plot discrete radial positions as vertical lines from addendum to profile
+    # Build a single line series with segments (using NaN to break lines)
+    stem_x = []
+    stem_y = []
+    for i, (li, r_pos) in enumerate(zip(section_positions, radial_position)):
+        stem_x.extend([li, li, float('nan')])
+        stem_y.extend([r_addendum, r_pos, float('nan')])
+
+    dpg.add_line_series(
+        stem_x,
+        stem_y,
+        label="Section Profile",
         tag="series_longmod_discrete",
         parent=y_axis
     )
     dpg.bind_item_theme("series_longmod_discrete", "theme_line_flexspline")
 
+    # Add scatter points at the tips
+    dpg.add_scatter_series(
+        section_positions.tolist(),
+        radial_position.tolist(),
+        label="Section Points",
+        tag="series_longmod_points",
+        parent=y_axis
+    )
+    dpg.bind_item_theme("series_longmod_points", "theme_line_flexspline")
+
     # Polynomial fit if requested
     poly_coeffs = None
     if fit_poly and n_sections > poly_degree:
         try:
-            # Fit polynomial (in mm)
+            # Fit polynomial to modification values (in mm)
             poly_coeffs = np.polyfit(section_positions, modification_mm, poly_degree)
             poly_func = np.poly1d(poly_coeffs)
 
-            # Generate smooth curve for plotting
+            # Generate smooth curve for plotting (in global coordinates)
             x_smooth = np.linspace(l0, l_end, 100)
-            y_smooth = poly_func(x_smooth)
+            y_smooth_mod = poly_func(x_smooth)
+            y_smooth = r_addendum + y_smooth_mod  # Convert to global
 
             dpg.add_line_series(
                 x_smooth.tolist(),
@@ -978,11 +1028,11 @@ def _calculate_modification():
         except Exception as e:
             print(f"Polynomial fit failed: {e}")
 
-    # Add reference line at zero
+    # Add reference line at addendum circle (global coordinate)
     dpg.add_line_series(
         [l0, l_end],
-        [0, 0],
-        label="Zero Reference",
+        [r_addendum, r_addendum],
+        label=f"Addendum Circle (r={r_addendum:.3f})",
         tag="series_longmod_zero",
         parent=y_axis
     )
@@ -993,7 +1043,7 @@ def _calculate_modification():
         mod_range = 0.01  # Minimum range in mm
     dpg.add_line_series(
         [li_main, li_main],
-        [-mod_range, mod_range],
+        [r_addendum - mod_range, r_addendum + mod_range],
         label=f"Main Section (l\u1d62={li_main})",
         tag="series_longmod_main",
         parent=y_axis
@@ -1010,31 +1060,32 @@ def _calculate_modification():
     max_mod = np.max(np.abs(modification_mm))
     update_info_text(
         "tab_longmod",
-        f"Computed {n_sections} sections. Max modification: {max_mod:.4f} mm",
+        f"Computed {n_sections} sections. Addendum r={r_addendum:.3f}mm, max mod: {max_mod:.4f}mm",
         color=(100, 255, 100)
     )
 
 
 def _update_results_display(positions, modifications, k_values, poly_coeffs, poly_degree):
     """Update the results panel with calculation summary."""
-    # Result 1: Max modification (most negative)
+    # Result 1: Addendum radius (global reference)
+    r_addendum = _last_calculation.get("r_addendum", 0) if _last_calculation else 0
+    if dpg.does_item_exist("longmod_result_1"):
+        dpg.set_value("longmod_result_1", f"Addendum radius: {r_addendum:.3f} mm")
+
+    # Result 2: Max modification (most negative)
     mod_min = np.min(modifications)
     mod_max = np.max(modifications)
-    if dpg.does_item_exist("longmod_result_1"):
-        dpg.set_value("longmod_result_1", f"Mod range: {mod_min:.4f} to {mod_max:.4f} mm")
-
-    # Result 2: Baseline interference at main section
-    baseline = _last_calculation.get("baseline_interference", 0) if _last_calculation else 0
     if dpg.does_item_exist("longmod_result_2"):
-        dpg.set_value("longmod_result_2", f"Baseline dmax: {baseline:.4f} mm")
+        dpg.set_value("longmod_result_2", f"Mod range: {mod_min:.4f} to {mod_max:.4f} mm")
 
-    # Result 3: Modification at start of teeth (li=l0)
+    # Result 3: Radial position at tooth start
+    radial_pos = _last_calculation.get("radial_position", modifications) if _last_calculation else modifications
     if dpg.does_item_exist("longmod_result_3"):
-        dpg.set_value("longmod_result_3", f"At tooth start: {modifications[0]:.4f} mm")
+        dpg.set_value("longmod_result_3", f"At tooth start: r={radial_pos[0]:.4f} mm")
 
-    # Result 4: Modification at end of teeth
+    # Result 4: Radial position at tooth end
     if dpg.does_item_exist("longmod_result_4"):
-        dpg.set_value("longmod_result_4", f"At tooth end: {modifications[-1]:.4f} mm")
+        dpg.set_value("longmod_result_4", f"At tooth end: r={radial_pos[-1]:.4f} mm")
 
     # Result 5: k value range
     k_min = np.min(k_values)
@@ -1042,10 +1093,65 @@ def _update_results_display(positions, modifications, k_values, poly_coeffs, pol
     if dpg.does_item_exist("longmod_result_5"):
         dpg.set_value("longmod_result_5", f"k range: {k_min:.3f} to {k_max:.3f}")
 
+    # Display polynomial equation if available
+    _update_equation_display(poly_coeffs, r_addendum)
+
+
+def _update_equation_display(poly_coeffs, r_addendum):
+    """Update the equation display in the results panel."""
+    eq_tags = ["longmod_eq_label", "longmod_eq_range", "longmod_eq_xt", "longmod_eq_yt", "longmod_eq_zt"]
+
+    if poly_coeffs is None or _last_calculation is None:
+        # Hide equation display
+        for tag in eq_tags:
+            if dpg.does_item_exist(tag):
+                dpg.configure_item(tag, show=False)
+        return
+
+    l0 = _last_calculation["l0"]
+    l_end = _last_calculation["l_end"]
+
+    # Build polynomial string
+    degree = len(poly_coeffs) - 1
+    terms = []
+
+    for i, coef in enumerate(poly_coeffs):
+        power = degree - i
+        if abs(coef) < 1e-12:
+            continue
+
+        if power == 0:
+            terms.append(f"{coef:.6g}")
+        elif power == 1:
+            terms.append(f"{coef:.6g}*t")
+        else:
+            terms.append(f"{coef:.6g}*t^{power}")
+
+    poly_str = " + ".join(terms).replace("+ -", "- ")
+
+    # Update displays
+    if dpg.does_item_exist("longmod_eq_label"):
+        dpg.configure_item("longmod_eq_label", show=True)
+
+    if dpg.does_item_exist("longmod_eq_range"):
+        dpg.set_value("longmod_eq_range", f"t: {l0} to {l_end}")
+        dpg.configure_item("longmod_eq_range", show=True)
+
+    if dpg.does_item_exist("longmod_eq_xt"):
+        xt_eq = f"Xt = {r_addendum:.6f} + {poly_str}"
+        dpg.set_value("longmod_eq_xt", xt_eq)
+        dpg.configure_item("longmod_eq_xt", show=True)
+
+    if dpg.does_item_exist("longmod_eq_yt"):
+        dpg.configure_item("longmod_eq_yt", show=True)
+
+    if dpg.does_item_exist("longmod_eq_zt"):
+        dpg.configure_item("longmod_eq_zt", show=True)
+
 
 def _clear_plot_series():
     """Clear all plot series."""
-    tags = ["series_longmod_discrete", "series_longmod_poly", "series_longmod_zero", "series_longmod_main"]
+    tags = ["series_longmod_discrete", "series_longmod_points", "series_longmod_poly", "series_longmod_zero", "series_longmod_main"]
     for tag in tags:
         if dpg.does_item_exist(tag):
             dpg.delete_item(tag)
@@ -1075,6 +1181,12 @@ def _reset_parameters():
         if dpg.does_item_exist(tag):
             dpg.set_value(tag, "")
 
+    # Hide equation display
+    eq_tags = ["longmod_eq_label", "longmod_eq_range", "longmod_eq_xt", "longmod_eq_yt", "longmod_eq_zt"]
+    for tag in eq_tags:
+        if dpg.does_item_exist(tag):
+            dpg.configure_item(tag, show=False)
+
     # Clear plot
     _clear_plot_series()
 
@@ -1083,3 +1195,199 @@ def _reset_parameters():
         "Parameters reset to defaults.",
         color=(100, 255, 100)
     )
+
+
+def _copy_equation_to_clipboard():
+    """Copy the polynomial equation to clipboard for SolidWorks equation-driven curve.
+
+    Format for SolidWorks:
+    - Xt = radial position as function of t
+    - Yt = 0
+    - Zt = t
+    - t ranges from l0 to l_end
+    """
+    import tkinter as tk
+
+    if _last_calculation is None:
+        update_info_text(
+            "tab_longmod",
+            "Run Calculate first to generate equation.",
+            color=(255, 200, 100)
+        )
+        return
+
+    poly_coeffs = _last_calculation.get("poly_coeffs", None)
+    if poly_coeffs is None:
+        update_info_text(
+            "tab_longmod",
+            "Enable polynomial fit to generate equation.",
+            color=(255, 200, 100)
+        )
+        return
+
+    r_addendum = _last_calculation["r_addendum"]
+    l0 = _last_calculation["l0"]
+    l_end = _last_calculation["l_end"]
+
+    # Build polynomial string for X equation
+    # poly_coeffs are in descending order: [a_n, a_(n-1), ..., a_1, a_0]
+    degree = len(poly_coeffs) - 1
+    terms = []
+
+    for i, coef in enumerate(poly_coeffs):
+        power = degree - i
+        if abs(coef) < 1e-12:
+            continue
+
+        if power == 0:
+            terms.append(f"{coef:.8g}")
+        elif power == 1:
+            terms.append(f"{coef:.8g}*t")
+        else:
+            terms.append(f"{coef:.8g}*t^{power}")
+
+    poly_str = " + ".join(terms).replace("+ -", "- ")
+
+    # Build the full equation set
+    equation_text = f"""SolidWorks Equation-Driven Curve (Parametric)
+=============================================
+Parameter range: t1 = {l0}  to  t2 = {l_end}
+
+Xt = {r_addendum:.6f} + {poly_str}
+Yt = 0
+Zt = t
+
+(X = radial position, Y = 0, Z = axial distance from cup bottom)
+"""
+
+    try:
+        # Use tkinter for clipboard
+        root = tk.Tk()
+        root.withdraw()
+        root.clipboard_clear()
+        root.clipboard_append(equation_text)
+        root.update()  # Required for clipboard to persist
+        root.destroy()
+
+        update_info_text(
+            "tab_longmod",
+            "Equation copied to clipboard!",
+            color=(100, 255, 100)
+        )
+    except Exception as e:
+        # Fallback: show in a popup if clipboard fails
+        _show_equation_popup(equation_text)
+
+
+def _show_equation_popup(equation_text: str):
+    """Show equation in a popup window for manual copying."""
+    if dpg.does_item_exist("equation_popup"):
+        dpg.delete_item("equation_popup")
+
+    with dpg.window(
+        label="Equation for SolidWorks",
+        tag="equation_popup",
+        modal=True,
+        width=scaled(500),
+        height=scaled(300),
+        pos=(dpg.get_viewport_width() // 2 - scaled(250),
+             dpg.get_viewport_height() // 2 - scaled(150)),
+        no_resize=False,
+        on_close=lambda: dpg.delete_item("equation_popup")
+    ):
+        dpg.add_text("Copy the equation below for SolidWorks:", color=(180, 180, 255))
+        dpg.add_spacer(height=10)
+        dpg.add_input_text(
+            default_value=equation_text,
+            multiline=True,
+            readonly=True,
+            width=-1,
+            height=scaled(200),
+            tag="equation_text_field"
+        )
+        dpg.add_spacer(height=10)
+        dpg.add_button(
+            label="Close",
+            callback=lambda: dpg.delete_item("equation_popup"),
+            width=-1
+        )
+
+
+def _export_sldcrv():
+    """Export the longitudinal modification profile as .sldcrv for SolidWorks revolve cut.
+
+    Coordinate mapping for revolve cut:
+    - X = radial position (from global coordinates)
+    - Y = 0
+    - Z = lᵢ (distance from cup bottom)
+    """
+    import tkinter as tk
+    from tkinter import filedialog
+
+    if _last_calculation is None:
+        update_info_text(
+            "tab_longmod",
+            "Run Calculate first before exporting.",
+            color=(255, 200, 100)
+        )
+        return
+
+    # Get calculation data
+    r_addendum = _last_calculation.get("r_addendum", 0)
+    poly_coeffs = _last_calculation.get("poly_coeffs", None)
+    l0 = _last_calculation["l0"]
+    l_end = _last_calculation["l_end"]
+
+    # Generate curve points
+    if poly_coeffs is not None:
+        # Use polynomial fit for smooth curve
+        n_points = 100
+        z_values = np.linspace(l0, l_end, n_points)
+        poly_func = np.poly1d(poly_coeffs)
+        mod_values = poly_func(z_values)
+        x_values = r_addendum + mod_values  # Convert to global radial
+    else:
+        # Use discrete section data
+        z_values = _last_calculation["positions"]
+        x_values = _last_calculation["radial_position"]
+
+    # Build 3D points: (X=radial, Y=0, Z=axial position)
+    points_3d = [(float(x), 0.0, float(z)) for x, z in zip(x_values, z_values)]
+
+    # Default export directory
+    default_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "exports")
+    os.makedirs(default_dir, exist_ok=True)
+
+    # Show file save dialog
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes('-topmost', True)
+
+    filepath = filedialog.asksaveasfilename(
+        initialdir=default_dir,
+        initialfile="longmod_profile.sldcrv",
+        defaultextension=".sldcrv",
+        filetypes=[("SolidWorks Curve", "*.sldcrv"), ("All files", "*.*")],
+        title="Export Longitudinal Modification Profile"
+    )
+
+    root.destroy()
+
+    if not filepath:
+        return  # User cancelled
+
+    # Write the file
+    success = write_sldcrv_3d(filepath, points_3d)
+
+    if success:
+        update_info_text(
+            "tab_longmod",
+            f"Exported {len(points_3d)} points to {os.path.basename(filepath)}",
+            color=(100, 255, 100)
+        )
+    else:
+        update_info_text(
+            "tab_longmod",
+            "Export failed. Check console for errors.",
+            color=(255, 100, 100)
+        )
