@@ -65,18 +65,29 @@ def setup_fonts(dpi_scale: float = 1.0):
     font_size = int(14 * dpi_scale)
 
     with dpg.font_registry():
-        # Try to load Consolas for consistency with original app
+        # Try to load fonts that support Unicode subscripts
+        # DejaVu Sans Mono has good Unicode coverage including subscripts
         font_paths = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "C:/Windows/Fonts/DejaVuSansMono.ttf",
             "C:/Windows/Fonts/consola.ttf",
             "C:/Windows/Fonts/consolab.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
         ]
 
         default_font = None
         for path in font_paths:
             if os.path.exists(path):
                 try:
-                    default_font = dpg.add_font(path, font_size)
+                    with dpg.font(path, font_size) as font:
+                        # Add default ASCII range
+                        dpg.add_font_range_hint(dpg.mvFontRangeHint_Default)
+                        # Add Greek letters (α, β, γ, δ, ω, μ, etc.) U+0370 to U+03FF
+                        dpg.add_font_range(0x0370, 0x03FF)
+                        # Add subscript digits and letters U+2080 to U+209F
+                        dpg.add_font_range(0x2080, 0x209F)
+                        # Add superscript modifier letters U+1D00 to U+1DBF
+                        dpg.add_font_range(0x1D00, 0x1DBF)
+                        default_font = font
                     break
                 except Exception:
                     continue

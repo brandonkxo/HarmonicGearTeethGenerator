@@ -275,7 +275,7 @@ def _draw_circle_centers(result, y_axis):
     # O1 center (small scatter around point to make it visible)
     dpg.add_scatter_series(
         [x1], [y1],
-        label="O\u2081",
+        label="O₁",
         tag="series_center_O1",
         parent=y_axis
     )
@@ -283,7 +283,7 @@ def _draw_circle_centers(result, y_axis):
     # O2 center
     dpg.add_scatter_series(
         [x2], [y2],
-        label="O\u2082",
+        label="O₂",
         tag="series_center_O2",
         parent=y_axis
     )
