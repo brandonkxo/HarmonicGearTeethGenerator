@@ -41,6 +41,11 @@ _longmod_texture = None
 # Module state for storing calculation results
 _last_calculation = None
 
+# Animation state
+_animation_running = False
+_animation_section_idx = 0
+_animation_data = None  # Stores pre-computed tooth data for animation
+
 
 def _load_reference_texture():
     """Load the longitudinal modification reference image texture."""
@@ -295,6 +300,14 @@ def create_tab_longitudinal_modification():
                     width=scaled(100)
                 )
 
+            dpg.add_spacer(height=5)
+            dpg.add_button(
+                label="Show Tooth Overlay Animation",
+                tag="btn_show_overlay",
+                callback=_show_overlay_animation,
+                width=-1
+            )
+
             dpg.add_spacer(height=10)
             dpg.add_separator()
 
@@ -321,6 +334,259 @@ def _toggle_equal_aspects(sender, app_data, user_data):
     """Toggle equal axis scaling on the plot."""
     if dpg.does_item_exist("tab_longmod_plot"):
         dpg.configure_item("tab_longmod_plot", equal_aspects=app_data)
+
+
+def _show_overlay_animation():
+    """Show animated tooth overlay cycling through all sections."""
+    global _animation_running, _animation_section_idx, _animation_data
+
+    if _last_calculation is None:
+        update_info_text(
+            "tab_longmod",
+            "Run Calculate first to generate section data.",
+            color=(255, 200, 100)
+        )
+        return
+
+    # Get parameters
+    params = AppState.read_from_widgets("tab_ov")
+    w0 = params["w0"]
+    li_main = _last_calculation["li_main"]
+    positions = _last_calculation["positions"]
+    k_values = _last_calculation["k_values"]
+
+    # Generate CS tooth once
+    cs_tooth, rp_c = _generate_cs_tooth(params)
+    if cs_tooth is None:
+        update_info_text(
+            "tab_longmod",
+            "Error generating circular spline tooth.",
+            color=(255, 100, 100)
+        )
+        return
+
+    # Pre-compute all FS teeth for animation
+    fs_teeth = []
+    for i, (li, k_i) in enumerate(zip(positions, k_values)):
+        w_i = w0 * k_i
+        fs_tooth, _ = _generate_deformed_fs_tooth(params, w_i)
+        fs_teeth.append({
+            "tooth": fs_tooth,
+            "li": li,
+            "k_i": k_i,
+            "w_i": w_i
+        })
+
+    _animation_data = {
+        "cs_tooth": cs_tooth,
+        "fs_teeth": fs_teeth,
+        "n_sections": len(positions),
+        "li_main": li_main
+    }
+
+    # Clean up existing window
+    if dpg.does_item_exist("overlay_anim_window"):
+        dpg.delete_item("overlay_anim_window")
+
+    _animation_section_idx = 0
+    _animation_running = True
+
+    # Create popup window
+    window_width = scaled(600)
+    window_height = scaled(550)
+
+    with dpg.window(
+        label="Tooth Overlay Animation",
+        tag="overlay_anim_window",
+        width=window_width,
+        height=window_height,
+        pos=(dpg.get_viewport_width() // 2 - window_width // 2,
+             dpg.get_viewport_height() // 2 - window_height // 2),
+        no_collapse=True,
+        on_close=_stop_animation
+    ):
+        # Info text
+        dpg.add_text("", tag="overlay_anim_info", color=(200, 200, 100))
+        dpg.add_spacer(height=5)
+
+        # Plot
+        with dpg.plot(
+            tag="overlay_anim_plot",
+            width=-1,
+            height=scaled(420),
+            equal_aspects=True,
+            anti_aliased=True
+        ):
+            dpg.add_plot_legend(location=dpg.mvPlot_Location_NorthEast)
+            dpg.add_plot_axis(dpg.mvXAxis, label="X (mm)", tag="overlay_anim_x")
+            with dpg.plot_axis(dpg.mvYAxis, label="Y (mm)", tag="overlay_anim_y"):
+                pass
+
+        dpg.add_spacer(height=10)
+
+        # Control buttons
+        with dpg.group(horizontal=True):
+            dpg.add_button(
+                label="Previous",
+                tag="btn_anim_prev",
+                callback=lambda: _advance_animation(-1),
+                width=scaled(80)
+            )
+            dpg.add_button(
+                label="Play/Pause",
+                tag="btn_anim_play",
+                callback=_toggle_animation,
+                width=scaled(100)
+            )
+            dpg.add_button(
+                label="Next",
+                tag="btn_anim_next",
+                callback=lambda: _advance_animation(1),
+                width=scaled(80)
+            )
+            dpg.add_spacer(width=20)
+            dpg.add_button(
+                label="Close",
+                callback=_stop_animation,
+                width=scaled(80)
+            )
+
+    # Draw first frame
+    _draw_animation_frame()
+
+    # Start auto-advance timer
+    _start_animation_timer()
+
+
+def _draw_animation_frame():
+    """Draw the current animation frame."""
+    global _animation_section_idx
+
+    if _animation_data is None:
+        return
+
+    cs_tooth = _animation_data["cs_tooth"]
+    fs_data = _animation_data["fs_teeth"][_animation_section_idx]
+    fs_tooth = fs_data["tooth"]
+    li = fs_data["li"]
+    k_i = fs_data["k_i"]
+    w_i = fs_data["w_i"]
+    n_sections = _animation_data["n_sections"]
+    li_main = _animation_data["li_main"]
+
+    # Update info text
+    if dpg.does_item_exist("overlay_anim_info"):
+        is_main = abs(li - li_main) < 0.01
+        main_marker = " (MAIN SECTION)" if is_main else ""
+        dpg.set_value(
+            "overlay_anim_info",
+            f"Section {_animation_section_idx + 1}/{n_sections} | "
+            f"lᵢ = {li:.2f} mm | k = {k_i:.3f} | w = {w_i:.4f} mm{main_marker}"
+        )
+
+    # Clear existing series
+    for tag in ["series_anim_fs", "series_anim_cs"]:
+        if dpg.does_item_exist(tag):
+            dpg.delete_item(tag)
+
+    y_axis = "overlay_anim_y"
+
+    # Draw FS tooth
+    if fs_tooth:
+        x_data = [p[0] for p in fs_tooth] + [fs_tooth[0][0]]
+        y_data = [p[1] for p in fs_tooth] + [fs_tooth[0][1]]
+        dpg.add_line_series(
+            x_data, y_data,
+            label=f"Flexspline (k={k_i:.3f})",
+            tag="series_anim_fs",
+            parent=y_axis
+        )
+        dpg.bind_item_theme("series_anim_fs", "theme_line_flexspline")
+
+    # Draw CS tooth
+    if cs_tooth:
+        x_data = [p[0] for p in cs_tooth] + [cs_tooth[0][0]]
+        y_data = [p[1] for p in cs_tooth] + [cs_tooth[0][1]]
+        dpg.add_line_series(
+            x_data, y_data,
+            label="Circular Spline",
+            tag="series_anim_cs",
+            parent=y_axis
+        )
+        dpg.bind_item_theme("series_anim_cs", "theme_line_circspline")
+
+    # Fit axes on first frame
+    if _animation_section_idx == 0:
+        dpg.fit_axis_data("overlay_anim_x")
+        dpg.fit_axis_data("overlay_anim_y")
+
+
+def _advance_animation(direction=1):
+    """Advance to next/previous section."""
+    global _animation_section_idx
+
+    if _animation_data is None:
+        return
+
+    n_sections = _animation_data["n_sections"]
+    _animation_section_idx = (_animation_section_idx + direction) % n_sections
+    _draw_animation_frame()
+
+
+def _toggle_animation():
+    """Toggle animation play/pause."""
+    global _animation_running
+
+    _animation_running = not _animation_running
+    if _animation_running:
+        _start_animation_timer()
+
+
+def _start_animation_timer():
+    """Start the animation timer."""
+    if not _animation_running:
+        return
+
+    if not dpg.does_item_exist("overlay_anim_window"):
+        return
+
+    # Schedule next frame in 500ms
+    dpg.split_frame(callback=_animation_timer_callback)
+
+
+def _animation_timer_callback():
+    """Timer callback for animation."""
+    import time
+
+    if not _animation_running:
+        return
+
+    if not dpg.does_item_exist("overlay_anim_window"):
+        return
+
+    # Use a simple frame counter approach
+    if not hasattr(_animation_timer_callback, "last_time"):
+        _animation_timer_callback.last_time = time.time()
+
+    current_time = time.time()
+    if current_time - _animation_timer_callback.last_time >= 0.5:
+        _animation_timer_callback.last_time = current_time
+        _advance_animation(1)
+
+    # Continue timer
+    if _animation_running and dpg.does_item_exist("overlay_anim_window"):
+        dpg.split_frame(callback=_animation_timer_callback)
+
+
+def _stop_animation():
+    """Stop animation and close window."""
+    global _animation_running, _animation_data
+
+    _animation_running = False
+    _animation_data = None
+
+    if dpg.does_item_exist("overlay_anim_window"):
+        dpg.delete_item("overlay_anim_window")
 
 
 def _create_plot():
