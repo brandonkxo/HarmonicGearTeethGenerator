@@ -53,6 +53,7 @@ from dpg_app.tabs.tab_conjugate_tooth import create_tab_conjugate_tooth
 from dpg_app.tabs.tab_flexspline_full import create_tab_flexspline_full
 from dpg_app.tabs.tab_circular_spline import create_tab_circular_spline
 from dpg_app.tabs.tab_radial_modification import create_tab_radial_modification
+from dpg_app.tabs.tab_longitudinal_modification import create_tab_longitudinal_modification
 
 
 def create_menu_bar():
@@ -182,6 +183,9 @@ def create_main_window():
 
             with dpg.tab(label="2.5 Radial Modification", tag="tab_overlay"):
                 create_tab_radial_modification()
+
+            with dpg.tab(label="2.6 Longitudinal Mod", tag="tab_longmod"):
+                create_tab_longitudinal_modification()
 
         dpg.add_separator()
         create_status_bar()
