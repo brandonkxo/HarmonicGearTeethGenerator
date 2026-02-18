@@ -219,30 +219,25 @@ def create_tab_longitudinal_modification():
             dpg.add_spacer(height=10)
 
             # Deformation Parameters
-            dpg.add_text("Deformation Parameters", color=(180, 180, 255))
+            dpg.add_text("Straight Generatrix Theorem", color=(180, 180, 255))
             dpg.add_spacer(height=5)
 
-            # Main section deformation coefficient
-            with dpg.group(horizontal=True):
-                dpg.add_text("Main coeff k\u2080:", color=(150, 150, 150))
-                dpg.add_input_float(
-                    tag="input_k0",
-                    default_value=1.0,
-                    width=scaled(100),
-                    format="%.3f",
-                    step=0.1,
-                    min_value=0.1,
-                    min_clamped=True
-                )
-            dpg.add_text("  Deformation coefficient at main section", color=(100, 100, 100), wrap=scaled(320))
+            dpg.add_text(
+                "Deformation coefficient kᵢ calculated from position:\n"
+                "  kᵢ = lᵢ / lᵢ_main\n"
+                "Amplitude varies linearly from cup bottom (k=0) to "
+                "main section (k=1).",
+                wrap=scaled(320),
+                color=(150, 150, 150)
+            )
 
-            dpg.add_spacer(height=5)
+            dpg.add_spacer(height=10)
 
             # w0 from main parameters (read-only display)
             with dpg.group(horizontal=True):
-                dpg.add_text("w\u2080 (from Tab 2.5):", color=(150, 150, 150))
+                dpg.add_text("w\u2080 (from params):", color=(150, 150, 150))
                 dpg.add_text("--", tag="display_w0", color=(200, 200, 100))
-            dpg.add_text("  Max radial deformation from parameters", color=(100, 100, 100), wrap=scaled(320))
+            dpg.add_text("  Radial deformation at main section", color=(100, 100, 100), wrap=scaled(320))
 
             dpg.add_spacer(height=15)
             dpg.add_separator()
@@ -524,11 +519,17 @@ def _calculate_interference(fs_tooth, fs_addendum, cs_tooth):
 def _calculate_modification():
     """Calculate the longitudinal modification amounts using rack method.
 
+    Uses the Straight Generatrix Theorem:
+    - Deformation coefficient k_i = l_i / l_i_main (linear with position)
+    - At cup bottom: k = 0 (no deformation)
+    - At main section: k = 1.0 (full deformation w0)
+    - Amplitude varies linearly along the axial direction
+
     For each longitudinal section:
-    1. Calculate the deformation coefficient k_i at that section
+    1. Calculate k_i = l_i / l_i_main (straight generatrix)
     2. Generate deformed FS tooth with w_i = w0 * k_i
     3. Calculate interference with CS tooth
-    4. The interference is the required modification
+    4. The interference relative to baseline is the required modification
     """
     global _last_calculation
 
@@ -536,7 +537,6 @@ def _calculate_modification():
     l0 = dpg.get_value("input_l0")  # Distance from cup bottom to start of teeth
     li_main = dpg.get_value("input_li_main")  # Distance from cup bottom to main section
     n_sections = dpg.get_value("input_n_sections")
-    k0 = dpg.get_value("input_k0")
     fit_poly = dpg.get_value("chk_poly_fit")
     poly_degree = dpg.get_value("input_poly_degree")
 
@@ -586,19 +586,20 @@ def _calculate_modification():
     # Calculate section positions
     section_positions = np.linspace(l0, l_end, n_sections)
 
-    # For each section, calculate the deformation and interference
-    # k_i = k0 * (li / li_main) - deformation coefficient varies with position
-    # At li_main: k = k0 (full deformation, design point)
-    # At l0: k = k0 * (l0 / li_main) < k0 (less deformation)
-    # At l_end: k = k0 * (l_end / li_main) > k0 (more deformation)
+    # Straight Generatrix Theorem:
+    # k_i = l_i / l_i_main (deformation coefficient varies linearly with position)
+    # At l_i_main: k = 1.0 (full deformation, design point)
+    # At l0: k = l0 / l_i_main < 1.0 (less deformation)
+    # At l_end: k = l_end / l_i_main > 1.0 (more deformation)
 
     k_values = []
     modification_mm = []
     dmax_x_values = []
     dmax_y_values = []
 
-    # Calculate interference at main section (baseline - should be ~0 or the design interference)
-    w_main = w0 * k0
+    # Calculate interference at main section (baseline)
+    # At main section, k = 1.0, so w = w0
+    w_main = w0  # k = 1.0 at main section
     fs_main, fs_add_main = _generate_deformed_fs_tooth(params, w_main)
     if fs_main is None:
         update_info_text(
@@ -612,9 +613,8 @@ def _calculate_modification():
     baseline_interference = max(dmax_x_main, dmax_y_main)
 
     for li in section_positions:
-        # Calculate k_i for this section
-        # k varies linearly with position, with k = k0 at li_main
-        k_i = k0 * (li / li_main)
+        # Straight generatrix: k_i = l_i / l_i_main
+        k_i = li / li_main
         k_values.append(k_i)
 
         # Calculate w_i for this section
@@ -657,7 +657,6 @@ def _calculate_modification():
         "li_main": li_main,
         "l_end": l_end,
         "tooth_length": tooth_length,
-        "k0": k0,
         "w0": w0,
         "baseline_interference": baseline_interference
     }
@@ -784,8 +783,6 @@ def _reset_parameters():
         dpg.set_value("input_li_main", 15.0)
     if dpg.does_item_exist("input_n_sections"):
         dpg.set_value("input_n_sections", 16)
-    if dpg.does_item_exist("input_k0"):
-        dpg.set_value("input_k0", 1.0)
     if dpg.does_item_exist("chk_poly_fit"):
         dpg.set_value("chk_poly_fit", True)
     if dpg.does_item_exist("input_poly_degree"):
