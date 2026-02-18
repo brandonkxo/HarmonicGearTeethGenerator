@@ -267,6 +267,17 @@ def create_tab_longitudinal_modification():
                     max_clamped=True
                 )
 
+            dpg.add_spacer(height=5)
+
+            with dpg.group(horizontal=True):
+                dpg.add_checkbox(
+                    label="",
+                    tag="chk_equal_aspects",
+                    default_value=False,
+                    callback=_toggle_equal_aspects
+                )
+                dpg.add_text("Equal axis scaling", color=(150, 150, 150))
+
             dpg.add_spacer(height=15)
 
             # Action buttons
@@ -306,6 +317,12 @@ def create_tab_longitudinal_modification():
             _create_plot()
 
 
+def _toggle_equal_aspects(sender, app_data, user_data):
+    """Toggle equal axis scaling on the plot."""
+    if dpg.does_item_exist("tab_longmod_plot"):
+        dpg.configure_item("tab_longmod_plot", equal_aspects=app_data)
+
+
 def _create_plot():
     """Create the visualization plot."""
     with dpg.plot(
@@ -313,7 +330,8 @@ def _create_plot():
         tag="tab_longmod_plot",
         width=-1,
         height=-1,
-        anti_aliased=True
+        anti_aliased=True,
+        equal_aspects=False
     ):
         dpg.add_plot_legend(location=dpg.mvPlot_Location_NorthEast)
 
@@ -787,6 +805,9 @@ def _reset_parameters():
         dpg.set_value("chk_poly_fit", True)
     if dpg.does_item_exist("input_poly_degree"):
         dpg.set_value("input_poly_degree", 4)
+    if dpg.does_item_exist("chk_equal_aspects"):
+        dpg.set_value("chk_equal_aspects", False)
+        _toggle_equal_aspects(None, False, None)
 
     # Clear results and displays
     if dpg.does_item_exist("display_tooth_length"):
