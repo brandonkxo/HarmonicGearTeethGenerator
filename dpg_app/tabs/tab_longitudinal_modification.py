@@ -1,20 +1,30 @@
 """
 Tab 2.6 - Longitudinal Modification
 
-Implements longitudinal spline modification based on the paper's Figure 15.
+Implements longitudinal spline modification based on the paper's Figure 12/15.
 Discretizes flexspline along longitudinal direction and calculates radial
-modification amounts for each section based on varying deformation coefficients.
+modification amounts for each section using the rack method.
 
 Key concept:
 - The flexspline cup deforms radially, but deformation varies along the cup length
 - Maximum deformation at the open end (wave generator contact)
 - Zero deformation at the closed cup bottom
 - Each longitudinal section needs different radial modification to compensate
+- Uses rack method: walks deformed FS tooth through CS engagement to measure interference
 """
 
 import dearpygui.dearpygui as dpg
 import numpy as np
+import math
 import os
+import sys
+
+# Add parent directory to path for equations import
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from equations import (
+    compute_profile, compute_conjugate_profile, smooth_conjugate_profile,
+    eq14_rho, eq21_mu, eq23_phi1, eq27_psi, eq29_transform
+)
 
 from dpg_app.app_state import AppState, scaled
 from dpg_app.widgets.output_panel import (
@@ -317,8 +327,209 @@ def _create_plot():
             pass
 
 
+def _generate_deformed_fs_tooth(params, w_value):
+    """Generate a deformed flexspline tooth profile for a given w (deformation).
+
+    Returns the tooth outline points and addendum points for interference calculation.
+    """
+    # Create modified params with the specified w value
+    modified_params = params.copy()
+    modified_params["w0"] = w_value
+
+    profile = compute_profile(modified_params)
+    if "error" in profile:
+        return None, None
+
+    rm = profile["rm"]
+
+    # Raw tooth profile segments (no fillets)
+    pts_AB = profile["pts_AB"]
+    pts_BC = profile["pts_BC"]
+    pts_CD = profile["pts_CD"]
+
+    # Combine into right flank (addendum to dedendum)
+    right_flank = list(pts_AB) + list(pts_BC) + list(pts_CD)
+    # Mirror for left flank
+    left_flank = [(-x, y) for x, y in reversed(right_flank)]
+
+    # Transform function for deformed coordinates (phi = 0 for first tooth)
+    def tooth_point_deformed(xr, yr):
+        phi = 0  # First tooth
+        rho = eq14_rho(phi, rm, w_value)
+        mu = eq21_mu(phi, w_value, rm)
+        phi1 = eq23_phi1(phi, w_value, rm)
+        gamma = phi1  # phi2 = 0
+        psi = eq27_psi(mu, gamma)
+        return eq29_transform(xr, yr, psi, rho, gamma)
+
+    # Build deformed tooth outline
+    fs_tooth = []
+    for x, y in left_flank:
+        fs_tooth.append(tooth_point_deformed(x, y))
+    for x, y in right_flank:
+        fs_tooth.append(tooth_point_deformed(x, y))
+
+    # Build addendum points for dmax_y calculation
+    ab_right = [tooth_point_deformed(x, y) for x, y in pts_AB]
+    ab_left = [tooth_point_deformed(-x, y) for x, y in pts_AB]
+    fs_addendum = {"right": ab_right, "left": ab_left}
+
+    return fs_tooth, fs_addendum
+
+
+def _generate_cs_tooth(params):
+    """Generate a circular spline tooth profile.
+
+    Returns the tooth outline points.
+    """
+    smooth_val = AppState.get_smooth()
+
+    conj = compute_conjugate_profile(params)
+    if "error" in conj:
+        return None, None
+
+    smoothed = smooth_conjugate_profile(conj, s=smooth_val)
+    if "error" in smoothed:
+        return None, None
+
+    rp_c = conj.get("rp_c", 25.5)
+    smoothed_flank = smoothed.get("smoothed_flank", [])
+
+    if not smoothed_flank:
+        return None, None
+
+    # Right flank from smoothed data (already in tooth-local coords)
+    right_flank_cs = list(smoothed_flank)
+    # Mirror for left flank
+    left_flank_cs = [(-x, y) for x, y in reversed(right_flank_cs)]
+
+    # Transform from tooth-local to global (first tooth at angle 0)
+    def local_to_global_cs(x_loc, y_loc):
+        r = rp_c + y_loc
+        theta = x_loc / rp_c  # tooth 0, no offset
+        return r * math.sin(theta), r * math.cos(theta)
+
+    # Build tooth outline
+    cs_tooth = []
+    for x, y in left_flank_cs:
+        cs_tooth.append(local_to_global_cs(x, y))
+    for x, y in right_flank_cs:
+        cs_tooth.append(local_to_global_cs(x, y))
+
+    return cs_tooth, rp_c
+
+
+def _calculate_interference(fs_tooth, fs_addendum, cs_tooth):
+    """Calculate interference between FS and CS teeth.
+
+    Returns (dmax_x, dmax_y) - the maximum penetration in X and Y directions.
+    """
+    if not fs_tooth or not cs_tooth:
+        return 0.0, 0.0
+
+    # Split FS tooth into left and right flanks based on X coordinate
+    fs_right = [(x, y) for x, y in fs_tooth if x > 0]
+    fs_left = [(x, y) for x, y in fs_tooth if x < 0]
+
+    # Get Y range of FS tooth
+    fs_y_min = min(p[1] for p in fs_tooth)
+    fs_y_max = max(p[1] for p in fs_tooth)
+
+    def interpolate_x_at_y(flank_points, target_y):
+        """Find X value on flank at given Y by linear interpolation."""
+        if not flank_points:
+            return None
+        sorted_pts = sorted(flank_points, key=lambda p: p[1])
+        for i in range(len(sorted_pts) - 1):
+            y1, y2 = sorted_pts[i][1], sorted_pts[i + 1][1]
+            if y1 <= target_y <= y2 or y2 <= target_y <= y1:
+                x1, x2 = sorted_pts[i][0], sorted_pts[i + 1][0]
+                if abs(y2 - y1) < 1e-9:
+                    return (x1 + x2) / 2
+                t = (target_y - y1) / (y2 - y1)
+                return x1 + t * (x2 - x1)
+        return None
+
+    def interpolate_y_at_x(flank_points, target_x):
+        """Find Y value on flank at given X by linear interpolation."""
+        if not flank_points:
+            return None
+        sorted_pts = sorted(flank_points, key=lambda p: p[0])
+        for i in range(len(sorted_pts) - 1):
+            x1, x2 = sorted_pts[i][0], sorted_pts[i + 1][0]
+            if x1 <= target_x <= x2 or x2 <= target_x <= x1:
+                y1, y2 = sorted_pts[i][1], sorted_pts[i + 1][1]
+                if abs(x2 - x1) < 1e-9:
+                    return (y1 + y2) / 2
+                t = (target_x - x1) / (x2 - x1)
+                return y1 + t * (y2 - y1)
+        return None
+
+    # Calculate dmax_x: X-penetration of CS into FS tooth
+    dmax_x = 0.0
+    for cs_x, cs_y in cs_tooth:
+        if cs_y < fs_y_min or cs_y > fs_y_max:
+            continue
+
+        fs_left_x = interpolate_x_at_y(fs_left, cs_y)
+        fs_right_x = interpolate_x_at_y(fs_right, cs_y)
+
+        if fs_left_x is None or fs_right_x is None:
+            continue
+
+        # Right side: CS penetrates if X < FS right boundary
+        if cs_x > 0 and cs_x < fs_right_x:
+            penetration = fs_right_x - cs_x
+            if penetration > dmax_x:
+                dmax_x = penetration
+
+        # Left side: CS penetrates if X > FS left boundary
+        if cs_x < 0 and cs_x > fs_left_x:
+            penetration = cs_x - fs_left_x
+            if penetration > dmax_x:
+                dmax_x = penetration
+
+    # Calculate dmax_y: Y-penetration of CS into FS addendum
+    dmax_y = 0.0
+    if fs_addendum is not None:
+        ab_right = fs_addendum["right"]
+        ab_left = fs_addendum["left"]
+        all_addendum = ab_right + ab_left
+
+        if all_addendum:
+            add_x_min = min(p[0] for p in all_addendum)
+            add_x_max = max(p[0] for p in all_addendum)
+
+            for cs_x, cs_y in cs_tooth:
+                if cs_x < add_x_min or cs_x > add_x_max:
+                    continue
+
+                if cs_x >= 0:
+                    fs_add_y = interpolate_y_at_x(ab_right, cs_x)
+                else:
+                    fs_add_y = interpolate_y_at_x(ab_left, cs_x)
+
+                if fs_add_y is None:
+                    continue
+
+                # CS penetrates addendum if CS_Y > FS addendum Y
+                if cs_y > fs_add_y:
+                    penetration = cs_y - fs_add_y
+                    if penetration > dmax_y:
+                        dmax_y = penetration
+
+    return dmax_x, dmax_y
+
+
 def _calculate_modification():
-    """Calculate the longitudinal modification amounts."""
+    """Calculate the longitudinal modification amounts using rack method.
+
+    For each longitudinal section:
+    1. Calculate the deformation coefficient k_i at that section
+    2. Generate deformed FS tooth with w_i = w0 * k_i
+    3. Calculate interference with CS tooth
+    4. The interference is the required modification
+    """
     global _last_calculation
 
     # Read parameters
@@ -329,14 +540,13 @@ def _calculate_modification():
     fit_poly = dpg.get_value("chk_poly_fit")
     poly_degree = dpg.get_value("input_poly_degree")
 
-    # Get w0 from AppState
-    w0 = AppState.get_param("w0")
+    # Get base parameters from AppState
+    params = AppState.read_from_widgets("tab_ov")
+    w0 = params["w0"]
 
     # Calculate derived values
-    # Tooth length = 2 × (li_main - l0)
-    # Main section is at the midpoint of the tooth region
     tooth_length = 2 * (li_main - l0)
-    l_end = l0 + tooth_length  # End of teeth
+    l_end = l0 + tooth_length
 
     # Update displays
     if dpg.does_item_exist("display_w0"):
@@ -361,65 +571,95 @@ def _calculate_modification():
         )
         return
 
-    update_info_text("tab_longmod", "Computing modification profile...", color=(255, 200, 100))
+    update_info_text("tab_longmod", "Computing with rack method...", color=(255, 200, 100))
+
+    # Generate CS tooth once (doesn't change between sections)
+    cs_tooth, rp_c = _generate_cs_tooth(params)
+    if cs_tooth is None:
+        update_info_text(
+            "tab_longmod",
+            "Error: Could not generate circular spline tooth.",
+            color=(255, 100, 100)
+        )
+        return
 
     # Calculate section positions
-    # Sections span from l0 (start of teeth) to l_end (end of teeth)
-    # l_i = distance from cup bottom to section i
     section_positions = np.linspace(l0, l_end, n_sections)
 
-    # Calculate modification based on Figure 12 from the paper:
-    # The cup wall bows in the opposite direction on the non-flex side,
-    # causing interference on BOTH sides of the main engagement section.
-    #
-    # Definitions from paper:
-    # - l0: distance from cup bottom to start of teeth
-    # - li: distance from cup bottom to section i
-    # - li_main: distance from cup bottom to main section (midpoint of teeth)
-    # - tooth_length = 2 × (li_main - l0)
-    #
-    # Key insight:
-    # - At main section (li = li_main): Zero modification (design point)
-    # - Away from main section (either direction): The cup bowing causes
-    #   the teeth to effectively protrude more, creating interference
-    # - Therefore, we need NEGATIVE modification (reduce tooth height)
-    #   on both sides of the main section
-    #
-    # The modification follows a parabolic relationship:
-    # - Centered at main section (li_main)
-    # - Magnitude increases with distance from main section
-    # - Always negative (tooth needs to be shorter)
+    # For each section, calculate the deformation and interference
+    # k_i = k0 * (li / li_main) - deformation coefficient varies with position
+    # At li_main: k = k0 (full deformation, design point)
+    # At l0: k = k0 * (l0 / li_main) < k0 (less deformation)
+    # At l_end: k = k0 * (l_end / li_main) > k0 (more deformation)
 
-    # Calculate distance from main section for each section
-    # delta_l = li - li_main (can be positive or negative)
-    delta_l = section_positions - li_main
+    k_values = []
+    modification_mm = []
+    dmax_x_values = []
+    dmax_y_values = []
 
-    # Half tooth length (distance from main section to either end)
-    half_tooth = li_main - l0
+    # Calculate interference at main section (baseline - should be ~0 or the design interference)
+    w_main = w0 * k0
+    fs_main, fs_add_main = _generate_deformed_fs_tooth(params, w_main)
+    if fs_main is None:
+        update_info_text(
+            "tab_longmod",
+            "Error: Could not generate flexspline tooth at main section.",
+            color=(255, 100, 100)
+        )
+        return
 
-    # Normalize by half tooth length
-    normalized_dist = delta_l / half_tooth
+    dmax_x_main, dmax_y_main = _calculate_interference(fs_main, fs_add_main, cs_tooth)
+    baseline_interference = max(dmax_x_main, dmax_y_main)
 
-    # Modification is proportional to (distance from main section)^2
-    # Using a parabolic model: modification = -w0 * k0 * (normalized_dist)^2
-    # This gives zero at li_main and increasingly negative values away from it
-    modification_mm = -w0 * k0 * (normalized_dist ** 2)
+    for li in section_positions:
+        # Calculate k_i for this section
+        # k varies linearly with position, with k = k0 at li_main
+        k_i = k0 * (li / li_main)
+        k_values.append(k_i)
 
-    # Calculate effective k values for display (shows how much "extra" deformation)
-    # k_effective represents the interference factor at each section
-    k_values = k0 * (1 + np.abs(normalized_dist))
+        # Calculate w_i for this section
+        w_i = w0 * k_i
+
+        # Generate FS tooth with this deformation
+        fs_tooth, fs_addendum = _generate_deformed_fs_tooth(params, w_i)
+
+        if fs_tooth is None:
+            # If generation fails, use interpolated value
+            dmax_x_values.append(0.0)
+            dmax_y_values.append(0.0)
+            modification_mm.append(0.0)
+            continue
+
+        # Calculate interference
+        dmax_x, dmax_y = _calculate_interference(fs_tooth, fs_addendum, cs_tooth)
+        dmax_x_values.append(dmax_x)
+        dmax_y_values.append(dmax_y)
+
+        # The modification needed is the interference relative to baseline
+        # Negative because we need to reduce the tooth (remove material)
+        total_interference = max(dmax_x, dmax_y)
+        mod = -(total_interference - baseline_interference)
+        modification_mm.append(mod)
+
+    k_values = np.array(k_values)
+    modification_mm = np.array(modification_mm)
+    dmax_x_values = np.array(dmax_x_values)
+    dmax_y_values = np.array(dmax_y_values)
 
     # Store calculation results
     _last_calculation = {
         "positions": section_positions,
         "k_values": k_values,
         "modification_mm": modification_mm,
+        "dmax_x_values": dmax_x_values,
+        "dmax_y_values": dmax_y_values,
         "l0": l0,
         "li_main": li_main,
         "l_end": l_end,
         "tooth_length": tooth_length,
         "k0": k0,
-        "w0": w0
+        "w0": w0,
+        "baseline_interference": baseline_interference
     }
 
     # Clear existing plot series
@@ -446,7 +686,7 @@ def _calculate_modification():
             poly_func = np.poly1d(poly_coeffs)
 
             # Generate smooth curve for plotting
-            x_smooth = np.linspace(0, L_tooth, 100)
+            x_smooth = np.linspace(l0, l_end, 100)
             y_smooth = poly_func(x_smooth)
 
             dpg.add_line_series(
@@ -504,45 +744,28 @@ def _update_results_display(positions, modifications, k_values, poly_coeffs, pol
     """Update the results panel with calculation summary."""
     # Result 1: Max modification (most negative)
     mod_min = np.min(modifications)
+    mod_max = np.max(modifications)
     if dpg.does_item_exist("longmod_result_1"):
-        dpg.set_value("longmod_result_1", f"Max reduction: {mod_min:.4f} mm")
+        dpg.set_value("longmod_result_1", f"Mod range: {mod_min:.4f} to {mod_max:.4f} mm")
 
-    # Result 2: At main section (should be ~0)
-    # Find index closest to li_main
-    li_main = _last_calculation["li_main"] if _last_calculation else 0
-    main_idx = np.argmin(np.abs(positions - li_main))
+    # Result 2: Baseline interference at main section
+    baseline = _last_calculation.get("baseline_interference", 0) if _last_calculation else 0
     if dpg.does_item_exist("longmod_result_2"):
-        dpg.set_value("longmod_result_2", f"At main section (l\u2080): {modifications[main_idx]:.4f} mm")
+        dpg.set_value("longmod_result_2", f"Baseline dmax: {baseline:.4f} mm")
 
     # Result 3: Modification at start of teeth (li=l0)
-    l0 = _last_calculation["l0"] if _last_calculation else 0
     if dpg.does_item_exist("longmod_result_3"):
-        dpg.set_value("longmod_result_3", f"At tooth start (l\u1d62=l\u2080): {modifications[0]:.4f} mm")
+        dpg.set_value("longmod_result_3", f"At tooth start: {modifications[0]:.4f} mm")
 
     # Result 4: Modification at end of teeth
     if dpg.does_item_exist("longmod_result_4"):
         dpg.set_value("longmod_result_4", f"At tooth end: {modifications[-1]:.4f} mm")
 
-    # Result 5: Polynomial coefficients if available
+    # Result 5: k value range
+    k_min = np.min(k_values)
+    k_max = np.max(k_values)
     if dpg.does_item_exist("longmod_result_5"):
-        if poly_coeffs is not None:
-            # Format polynomial: highest degree first
-            terms = []
-            for i, c in enumerate(poly_coeffs):
-                power = poly_degree - i
-                if abs(c) > 1e-6:
-                    if power == 0:
-                        terms.append(f"{c:.3f}")
-                    elif power == 1:
-                        terms.append(f"{c:.3f}x")
-                    else:
-                        terms.append(f"{c:.3f}x^{power}")
-            poly_str = " + ".join(terms[:3])  # Show first 3 terms
-            if len(terms) > 3:
-                poly_str += " + ..."
-            dpg.set_value("longmod_result_5", f"Poly: {poly_str}")
-        else:
-            dpg.set_value("longmod_result_5", "")
+        dpg.set_value("longmod_result_5", f"k range: {k_min:.3f} to {k_max:.3f}")
 
 
 def _clear_plot_series():
