@@ -97,45 +97,50 @@ def _create_param_input(
     tooltip = get_param_tooltip(key)
     default = float(DEFAULTS.get(key, 0.0))
 
-    with dpg.group(horizontal=True):
-        dpg.add_text(label, indent=10)
-        dpg.add_spacer()
+    with dpg.table(header_row=False, borders_innerH=False, borders_innerV=False,
+                   borders_outerH=False, borders_outerV=False, policy=dpg.mvTable_SizingStretchProp):
+        dpg.add_table_column(width_stretch=True, init_width_or_weight=1.0)
+        dpg.add_table_column(width_fixed=True, init_width_or_weight=scaled(130))
 
-        # Determine format based on parameter type
-        if key in ("z_f", "z_c"):
-            # Integer parameters
-            input_tag = f"{tag_prefix}_param_{key}"
-            dpg.add_input_int(
-                tag=input_tag,
-                default_value=int(default),
-                width=scaled(130),
-                min_value=1,
-                min_clamped=True
-            )
-        else:
-            # Float parameters
-            input_tag = f"{tag_prefix}_param_{key}"
-            dpg.add_input_float(
-                tag=input_tag,
-                default_value=default,
-                width=scaled(130),
-                format="%.4f"
-            )
+        with dpg.table_row():
+            # Label column
+            dpg.add_text(label, indent=10)
 
-        # Add handler for deactivation (click away or Enter)
-        handler_tag = f"{input_tag}_handler"
-        if dpg.does_item_exist(handler_tag):
-            dpg.delete_item(handler_tag)
-        with dpg.item_handler_registry(tag=handler_tag):
-            dpg.add_item_deactivated_after_edit_handler(
-                callback=_make_param_callback(key, on_change, input_tag)
-            )
-        dpg.bind_item_handler_registry(input_tag, handler_tag)
+            # Input column
+            if key in ("z_f", "z_c"):
+                # Integer parameters
+                input_tag = f"{tag_prefix}_param_{key}"
+                dpg.add_input_int(
+                    tag=input_tag,
+                    default_value=int(default),
+                    width=scaled(120),
+                    min_value=1,
+                    min_clamped=True
+                )
+            else:
+                # Float parameters
+                input_tag = f"{tag_prefix}_param_{key}"
+                dpg.add_input_float(
+                    tag=input_tag,
+                    default_value=default,
+                    width=scaled(120),
+                    format="%.4f"
+                )
 
-        # Add tooltip
-        if tooltip:
-            with dpg.tooltip(parent=input_tag):
-                dpg.add_text(tooltip, wrap=250)
+    # Add handler for deactivation (click away or Enter)
+    handler_tag = f"{input_tag}_handler"
+    if dpg.does_item_exist(handler_tag):
+        dpg.delete_item(handler_tag)
+    with dpg.item_handler_registry(tag=handler_tag):
+        dpg.add_item_deactivated_after_edit_handler(
+            callback=_make_param_callback(key, on_change, input_tag)
+        )
+    dpg.bind_item_handler_registry(input_tag, handler_tag)
+
+    # Add tooltip
+    if tooltip:
+        with dpg.tooltip(parent=input_tag):
+            dpg.add_text(tooltip, wrap=250)
 
 
 def _create_special_input(
@@ -147,31 +152,37 @@ def _create_special_input(
     on_change: Optional[Callable] = None
 ):
     """Create a special parameter input (smooth, fillets)."""
-    with dpg.group(horizontal=True):
-        dpg.add_text(label, indent=10)
-        dpg.add_spacer()
+    with dpg.table(header_row=False, borders_innerH=False, borders_innerV=False,
+                   borders_outerH=False, borders_outerV=False, policy=dpg.mvTable_SizingStretchProp):
+        dpg.add_table_column(width_stretch=True, init_width_or_weight=1.0)
+        dpg.add_table_column(width_fixed=True, init_width_or_weight=scaled(130))
 
-        input_tag = f"{tag_prefix}_param_{key}"
-        dpg.add_input_float(
-            tag=input_tag,
-            default_value=default,
-            width=scaled(130),
-            format="%.4f"
-        )
+        with dpg.table_row():
+            # Label column
+            dpg.add_text(label, indent=10)
 
-        # Add handler for deactivation (click away or Enter)
-        handler_tag = f"{input_tag}_handler"
-        if dpg.does_item_exist(handler_tag):
-            dpg.delete_item(handler_tag)
-        with dpg.item_handler_registry(tag=handler_tag):
-            dpg.add_item_deactivated_after_edit_handler(
-                callback=_make_special_callback(key, on_change, input_tag)
+            # Input column
+            input_tag = f"{tag_prefix}_param_{key}"
+            dpg.add_input_float(
+                tag=input_tag,
+                default_value=default,
+                width=scaled(120),
+                format="%.4f"
             )
-        dpg.bind_item_handler_registry(input_tag, handler_tag)
 
-        if tooltip:
-            with dpg.tooltip(parent=input_tag):
-                dpg.add_text(tooltip, wrap=250)
+    # Add handler for deactivation (click away or Enter)
+    handler_tag = f"{input_tag}_handler"
+    if dpg.does_item_exist(handler_tag):
+        dpg.delete_item(handler_tag)
+    with dpg.item_handler_registry(tag=handler_tag):
+        dpg.add_item_deactivated_after_edit_handler(
+            callback=_make_special_callback(key, on_change, input_tag)
+        )
+    dpg.bind_item_handler_registry(input_tag, handler_tag)
+
+    if tooltip:
+        with dpg.tooltip(parent=input_tag):
+            dpg.add_text(tooltip, wrap=250)
 
 
 def _make_param_callback(key: str, on_change: Optional[Callable], widget_tag: str):
