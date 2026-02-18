@@ -273,7 +273,7 @@ def create_tab_longitudinal_modification():
                 dpg.add_checkbox(
                     label="",
                     tag="chk_equal_aspects",
-                    default_value=False,
+                    default_value=True,
                     callback=_toggle_equal_aspects
                 )
                 dpg.add_text("Equal axis scaling", color=(150, 150, 150))
@@ -331,7 +331,7 @@ def _create_plot():
         width=-1,
         height=-1,
         anti_aliased=True,
-        equal_aspects=False
+        equal_aspects=True
     ):
         dpg.add_plot_legend(location=dpg.mvPlot_Location_NorthEast)
 
@@ -806,8 +806,8 @@ def _reset_parameters():
     if dpg.does_item_exist("input_poly_degree"):
         dpg.set_value("input_poly_degree", 4)
     if dpg.does_item_exist("chk_equal_aspects"):
-        dpg.set_value("chk_equal_aspects", False)
-        _toggle_equal_aspects(None, False, None)
+        dpg.set_value("chk_equal_aspects", True)
+        _toggle_equal_aspects(None, True, None)
 
     # Clear results and displays
     if dpg.does_item_exist("display_tooth_length"):
