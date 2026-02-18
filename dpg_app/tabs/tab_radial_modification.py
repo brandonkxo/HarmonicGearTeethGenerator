@@ -69,7 +69,8 @@ def create_tab_radial_modification():
             dpg.add_separator()
             dpg.add_spacer(height=5)
 
-            with dpg.group(horizontal=True):
+            # Main view buttons (Show Undeformed, Debug Single Tooth, Export)
+            with dpg.group(horizontal=True, tag="main_view_buttons"):
                 dpg.add_button(
                     label="Show Undeformed",
                     tag="btn_deform_ov",
@@ -80,11 +81,27 @@ def create_tab_radial_modification():
                     label="Debug Single Tooth",
                     tag="btn_debug_tooth",
                     callback=_toggle_debug_mode,
-                    width=scaled(120)
+                    width=scaled(140)
                 )
 
             dpg.add_spacer(height=5)
-            with dpg.group(horizontal=True):
+            with dpg.group(horizontal=True, tag="secondary_buttons"):
+                dpg.add_button(
+                    label="Export Wave Gen",
+                    tag="btn_export_wg",
+                    callback=_export_wave_gen,
+                    width=scaled(120)
+                )
+                dpg.add_button(
+                    label="Export dmax FS",
+                    tag="btn_export_dmax_fs",
+                    callback=_export_dmax_flexspline,
+                    width=scaled(120),
+                    show=False
+                )
+
+            # Debug mode buttons (Calculate dmax, Show Full Gears) - initially hidden
+            with dpg.group(horizontal=True, tag="debug_mode_buttons", show=False):
                 dpg.add_button(
                     label="Calculate dmax",
                     tag="btn_calc_dmax",
@@ -92,9 +109,9 @@ def create_tab_radial_modification():
                     width=scaled(120)
                 )
                 dpg.add_button(
-                    label="Export Wave Gen",
-                    tag="btn_export_wg",
-                    callback=_export_wave_gen,
+                    label="Show Full Gears",
+                    tag="btn_show_full_gears",
+                    callback=_toggle_debug_mode,
                     width=scaled(120)
                 )
 
@@ -141,6 +158,10 @@ def _update_plot():
     _dmax_applied_to_full = False  # Reset dmax applied state
     _last_dmax_x = 0.0  # Reset stored dmax values
     _last_dmax_y = 0.0
+
+    # Hide export dmax flexspline button when plot is reset
+    if dpg.does_item_exist("btn_export_dmax_fs"):
+        dpg.configure_item("btn_export_dmax_fs", show=False)
 
     params = AppState.read_from_widgets("tab_ov")
     smooth_val = AppState.get_smooth()
@@ -267,12 +288,172 @@ def _update_outputs():
 def _toggle_deformed():
     """Toggle deformed view."""
     global _show_deformed
+
+    # If switching to undeformed and dmax was applied, ask user if they want to apply dmax
+    if _show_deformed and _dmax_applied_to_full and (_applied_dmax_x > 0 or _applied_dmax_y > 0):
+        # User is switching from deformed (with dmax) to undeformed
+        _show_apply_dmax_to_undeformed_dialog()
+        return
+
     _show_deformed = not _show_deformed
 
     btn_text = "Show Undeformed" if _show_deformed else "Show Deformed"
     dpg.configure_item("btn_deform_ov", label=btn_text)
 
     _update_plot()
+
+
+def _show_apply_dmax_to_undeformed_dialog():
+    """Show dialog asking if user wants to apply dmax to undeformed flex spline."""
+    # Clean up existing dialog
+    if dpg.does_item_exist("apply_dmax_undeformed_dialog"):
+        dpg.delete_item("apply_dmax_undeformed_dialog")
+
+    window_width = scaled(380)
+    window_height = scaled(200)
+
+    with dpg.window(
+        label="Apply dmax to Undeformed Flexspline",
+        tag="apply_dmax_undeformed_dialog",
+        modal=True,
+        width=window_width,
+        height=window_height,
+        pos=(dpg.get_viewport_width() // 2 - window_width // 2,
+             dpg.get_viewport_height() // 2 - window_height // 2),
+        no_resize=True,
+        no_collapse=True,
+        on_close=lambda: _on_apply_dmax_undeformed_close(False)
+    ):
+        dpg.add_spacer(height=10)
+        dpg.add_text("Apply current dmax to undeformed flex spline?")
+        dpg.add_spacer(height=10)
+
+        # Show current dmax values
+        if _applied_dmax_x > 0:
+            dpg.add_text(f"  dmax_x = {_applied_dmax_x:.4f} mm", color=(255, 200, 100))
+        else:
+            dpg.add_text("  dmax_x = 0 (no X trim)", color=(120, 120, 120))
+
+        if _applied_dmax_y > 0:
+            dpg.add_text(f"  dmax_y = {_applied_dmax_y:.4f} mm", color=(255, 200, 100))
+        else:
+            dpg.add_text("  dmax_y = 0 (no Y trim)", color=(120, 120, 120))
+
+        dpg.add_spacer(height=20)
+
+        with dpg.group(horizontal=True):
+            dpg.add_button(
+                label="Yes",
+                callback=lambda: _on_apply_dmax_undeformed_close(True),
+                width=scaled(100)
+            )
+            dpg.add_spacer(width=20)
+            dpg.add_button(
+                label="No",
+                callback=lambda: _on_apply_dmax_undeformed_close(False),
+                width=scaled(100)
+            )
+
+
+def _on_apply_dmax_undeformed_close(apply_dmax: bool):
+    """Handle apply dmax to undeformed dialog close."""
+    global _show_deformed, _dmax_applied_to_full
+
+    # Close dialog
+    if dpg.does_item_exist("apply_dmax_undeformed_dialog"):
+        dpg.delete_item("apply_dmax_undeformed_dialog")
+
+    # Switch to undeformed view
+    _show_deformed = False
+    btn_text = "Show Deformed"
+    dpg.configure_item("btn_deform_ov", label=btn_text)
+
+    if apply_dmax:
+        # Keep dmax applied state and draw undeformed with dmax
+        _draw_undeformed_with_dmax()
+        # Show export dmax flexspline button
+        dpg.configure_item("btn_export_dmax_fs", show=True)
+    else:
+        # Clear dmax applied state and draw normal undeformed
+        _dmax_applied_to_full = False
+        # Hide export dmax flexspline button
+        dpg.configure_item("btn_export_dmax_fs", show=False)
+        _update_plot()
+
+
+def _draw_undeformed_with_dmax():
+    """Draw undeformed flexspline with dmax applied."""
+    global _last_fs
+
+    params = AppState.read_from_widgets("tab_ov")
+    fillet_add = AppState.get_fillet_add()
+    fillet_ded = AppState.get_fillet_ded()
+    smooth_val = AppState.get_smooth()
+
+    update_info_text("tab_ov", "Computing undeformed with dmax...", color=(255, 200, 100))
+
+    _clear_plot_series()
+    y_axis = "tab_ov_y"
+
+    # Build undeformed flexspline with dmax applied
+    from equations import build_dmax_full_flexspline
+    fs_result = build_dmax_full_flexspline(
+        params,
+        dmax_x=_applied_dmax_x,
+        dmax_y=_applied_dmax_y,
+        r_fillet_add=fillet_add,
+        r_fillet_ded=fillet_ded
+    )
+
+    if "error" in fs_result:
+        update_info_text("tab_ov", f"Flexspline error: {fs_result['error']}", color=(255, 100, 100))
+        return
+
+    _last_fs = fs_result
+
+    # Draw flexspline
+    chain = fs_result.get("chain_xy", [])
+    if chain:
+        x_data = [p[0] for p in chain] + [chain[0][0]]
+        y_data = [p[1] for p in chain] + [chain[0][1]]
+
+        dpg.add_line_series(
+            x_data, y_data,
+            label="Flexspline (dmax applied)",
+            tag="series_ov_fs",
+            parent=y_axis
+        )
+        dpg.bind_item_theme("series_ov_fs", "theme_line_flexspline")
+
+    # Draw circular spline (unchanged)
+    if _last_cs:
+        chain = _last_cs.get("chain_xy", [])
+        if chain:
+            x_data = [p[0] for p in chain] + [chain[0][0]]
+            y_data = [p[1] for p in chain] + [chain[0][1]]
+
+            dpg.add_line_series(
+                x_data, y_data,
+                label="Circular Spline",
+                tag="series_ov_cs",
+                parent=y_axis
+            )
+            dpg.bind_item_theme("series_ov_cs", "theme_line_circspline")
+
+    dpg.fit_axis_data("tab_ov_x")
+    dpg.fit_axis_data("tab_ov_y")
+
+    # Build status message
+    msg_parts = []
+    if _applied_dmax_x > 0:
+        msg_parts.append(f"dmax_x={_applied_dmax_x:.4f}")
+    if _applied_dmax_y > 0:
+        msg_parts.append(f"dmax_y={_applied_dmax_y:.4f}")
+
+    fs_pts = len(fs_result.get("chain_xy", []))
+    cs_pts = len(_last_cs.get("chain_xy", [])) if _last_cs else 0
+    msg = f"Undeformed with dmax: {', '.join(msg_parts)} mm | FS={fs_pts}, CS={cs_pts} pts"
+    update_info_text("tab_ov", msg, color=(100, 255, 100))
 
 
 def _export_wave_gen():
@@ -295,6 +476,20 @@ def _export_wave_gen():
     show_export_dialog("wave_generator", wg_pts, [".sldcrv", ".dxf"], closed=True)
 
 
+def _export_dmax_flexspline():
+    """Export undeformed flexspline with dmax applied."""
+    if _last_fs is None:
+        update_info_text("tab_ov", "No flexspline data to export.", color=(255, 200, 100))
+        return
+
+    chain = _last_fs.get("chain_xy", [])
+    if not chain:
+        update_info_text("tab_ov", "No flexspline chain data.", color=(255, 200, 100))
+        return
+
+    show_export_dialog("dmax_flexspline", chain, [".sldcrv", ".dxf"], closed=True)
+
+
 def _toggle_debug_mode():
     """Toggle debug single tooth view."""
     global _debug_mode, _trimmed_fs_tooth
@@ -308,9 +503,13 @@ def _toggle_debug_mode():
     else:
         # Entering debug mode
         _debug_mode = True
-        btn_text = "Show Full Gears"
-        dpg.configure_item("btn_debug_tooth", label=btn_text)
         _trimmed_fs_tooth = None  # Reset trim when entering debug mode
+
+        # Hide main view buttons, show debug mode buttons
+        dpg.configure_item("main_view_buttons", show=False)
+        dpg.configure_item("secondary_buttons", show=False)
+        dpg.configure_item("debug_mode_buttons", show=True)
+
         _draw_debug_tooth()
 
 
@@ -319,9 +518,15 @@ def _exit_debug_mode_without_dmax():
     global _debug_mode, _trimmed_fs_tooth, _dmax_applied_to_full
     _debug_mode = False
     _dmax_applied_to_full = False
-    btn_text = "Debug Single Tooth"
-    dpg.configure_item("btn_debug_tooth", label=btn_text)
     _trimmed_fs_tooth = None
+
+    # Show main view buttons, hide debug mode buttons
+    dpg.configure_item("main_view_buttons", show=True)
+    dpg.configure_item("secondary_buttons", show=True)
+    dpg.configure_item("debug_mode_buttons", show=False)
+    # Hide export dmax button (no dmax applied)
+    dpg.configure_item("btn_export_dmax_fs", show=False)
+
     _clear_plot_series()
     _draw_overlay()
     dpg.fit_axis_data("tab_ov_x")
@@ -390,9 +595,14 @@ def _on_apply_dmax_dialog_close(apply_dmax: bool):
         dpg.delete_item("apply_dmax_dialog")
 
     _debug_mode = False
-    btn_text = "Debug Single Tooth"
-    dpg.configure_item("btn_debug_tooth", label=btn_text)
     _trimmed_fs_tooth = None
+
+    # Show main view buttons, hide debug mode buttons
+    dpg.configure_item("main_view_buttons", show=True)
+    dpg.configure_item("secondary_buttons", show=True)
+    dpg.configure_item("debug_mode_buttons", show=False)
+    # Hide export dmax button (only shown for undeformed with dmax)
+    dpg.configure_item("btn_export_dmax_fs", show=False)
 
     if apply_dmax:
         _dmax_applied_to_full = True
