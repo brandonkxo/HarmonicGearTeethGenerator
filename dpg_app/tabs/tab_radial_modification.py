@@ -172,10 +172,10 @@ def _update_plot():
 
     # Build deformed flexspline
     if _show_deformed:
-        fs_result = build_deformed_flexspline(params)
+        fs_result = build_deformed_flexspline(params, r_fillet_add=fillet_add, r_fillet_ded=fillet_ded)
     else:
         from equations import build_full_flexspline
-        fs_result = build_full_flexspline(params)
+        fs_result = build_full_flexspline(params, r_fillet_add=fillet_add, r_fillet_ded=fillet_ded)
 
     if "error" in fs_result:
         update_info_text("tab_ov", f"Flexspline error: {fs_result['error']}", color=(255, 100, 100))
