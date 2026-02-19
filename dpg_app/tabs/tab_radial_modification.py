@@ -100,6 +100,16 @@ def create_tab_radial_modification():
                     show=False
                 )
 
+            # Solver button
+            dpg.add_spacer(height=5)
+            with dpg.group(horizontal=True, tag="solver_buttons"):
+                dpg.add_button(
+                    label="Solver",
+                    tag="btn_solver",
+                    callback=_show_solver_dialog,
+                    width=scaled(120)
+                )
+
             # Debug mode buttons (Calculate dmax, Show Full Gears) - initially hidden
             with dpg.group(horizontal=True, tag="debug_mode_buttons", show=False):
                 dpg.add_button(
@@ -1276,3 +1286,634 @@ def _reset_and_update():
     """Reset and update."""
     AppState.reset_to_defaults()
     _update_plot()
+
+
+# ══════════════════════════════════════════════════════════════════
+# Solver for minimizing dmax_y
+# ══════════════════════════════════════════════════════════════════
+
+_solver_running = False
+_solver_results = None
+_solver_cancel = False
+
+
+def _show_solver_dialog():
+    """Show dialog for solver inputs."""
+    # Clean up existing dialog
+    if dpg.does_item_exist("solver_dialog"):
+        dpg.delete_item("solver_dialog")
+
+    # Get current parameter values to show defaults
+    params = AppState.read_from_widgets("tab_ov")
+    m = params["m"]
+    z_f = params["z_f"]
+    mu_s = params["mu_s"]
+    mu_t = params["mu_t"]
+    hf = params["hf"]
+
+    # Calculate current rb
+    rp = m * z_f / 2.0
+    s = mu_s * m * z_f
+    t = mu_t * s
+    ds = s - t / 2.0
+    rm = rp - ds - hf
+    current_rb = rm - (s - ds)
+
+    window_width = scaled(400)
+    window_height = scaled(350)
+
+    with dpg.window(
+        label="Solver - Minimize dmax_y",
+        tag="solver_dialog",
+        modal=True,
+        width=window_width,
+        height=window_height,
+        pos=(dpg.get_viewport_width() // 2 - window_width // 2,
+             dpg.get_viewport_height() // 2 - window_height // 2),
+        no_resize=True,
+        no_collapse=True,
+        on_close=lambda: dpg.delete_item("solver_dialog")
+    ):
+        dpg.add_spacer(height=10)
+        dpg.add_text("Find parameters that minimize dmax_y interference")
+        dpg.add_text("while targeting specific rb and w0.", color=(180, 180, 180))
+        dpg.add_spacer(height=15)
+
+        # Target rb input
+        with dpg.group(horizontal=True):
+            dpg.add_text("Target rb (inner radius):")
+            dpg.add_input_float(
+                tag="solver_target_rb",
+                default_value=current_rb,
+                width=scaled(100),
+                format="%.4f"
+            )
+            dpg.add_text("mm")
+
+        dpg.add_spacer(height=5)
+
+        # Target w0 input
+        with dpg.group(horizontal=True):
+            dpg.add_text("Target w0 (deformation): ")
+            dpg.add_input_float(
+                tag="solver_target_w0",
+                default_value=params["w0"],
+                width=scaled(100),
+                format="%.4f"
+            )
+            dpg.add_text("mm")
+
+        dpg.add_spacer(height=5)
+
+        # Parameter bounds percentage
+        with dpg.group(horizontal=True):
+            dpg.add_text("Parameter bounds:        ")
+            dpg.add_input_float(
+                tag="solver_bounds_pct",
+                default_value=30.0,
+                width=scaled(100),
+                format="%.1f"
+            )
+            dpg.add_text("%")
+
+        dpg.add_spacer(height=5)
+
+        # rb tolerance
+        with dpg.group(horizontal=True):
+            dpg.add_text("rb tolerance:            ")
+            dpg.add_input_float(
+                tag="solver_rb_tol",
+                default_value=0.01,
+                width=scaled(100),
+                format="%.4f"
+            )
+            dpg.add_text("mm")
+
+        dpg.add_spacer(height=15)
+        dpg.add_separator()
+        dpg.add_spacer(height=10)
+
+        dpg.add_text(f"Current rb: {current_rb:.4f} mm", color=(150, 150, 150))
+        dpg.add_text(f"Current w0: {params['w0']:.4f} mm", color=(150, 150, 150))
+
+        dpg.add_spacer(height=15)
+
+        # Progress text (initially hidden)
+        dpg.add_text("", tag="solver_progress_text", color=(255, 200, 100))
+
+        dpg.add_spacer(height=10)
+
+        with dpg.group(horizontal=True):
+            dpg.add_button(
+                label="Run Solver",
+                tag="btn_run_solver",
+                callback=_run_solver,
+                width=scaled(100)
+            )
+            dpg.add_button(
+                label="Stop",
+                tag="btn_stop_solver",
+                callback=_stop_solver,
+                width=scaled(60),
+                show=False
+            )
+            dpg.add_spacer(width=10)
+            dpg.add_button(
+                label="Close",
+                tag="btn_close_solver",
+                callback=lambda: dpg.delete_item("solver_dialog"),
+                width=scaled(70)
+            )
+
+
+def _stop_solver():
+    """Stop the running solver."""
+    global _solver_cancel
+    _solver_cancel = True
+    dpg.set_value("solver_progress_text", "Stopping...")
+
+
+def _run_solver():
+    """Run the optimization solver."""
+    global _solver_running, _solver_results, _solver_cancel
+
+    if _solver_running:
+        return
+
+    _solver_running = True
+    _solver_cancel = False
+    _solver_results = None
+
+    # Get inputs
+    target_rb = dpg.get_value("solver_target_rb")
+    target_w0 = dpg.get_value("solver_target_w0")
+    bounds_pct = dpg.get_value("solver_bounds_pct") / 100.0
+    rb_tol = dpg.get_value("solver_rb_tol")
+
+    dpg.set_value("solver_progress_text", "Starting solver...")
+    dpg.configure_item("btn_run_solver", show=False)
+    dpg.configure_item("btn_stop_solver", show=True)
+    dpg.configure_item("btn_close_solver", enabled=False)
+
+    # Run solver in a separate thread to keep UI responsive
+    import threading
+    thread = threading.Thread(
+        target=_solver_thread,
+        args=(target_rb, target_w0, bounds_pct, rb_tol)
+    )
+    thread.start()
+
+
+def _solver_thread(target_rb: float, target_w0: float, bounds_pct: float, rb_tol: float):
+    """Solver thread - runs optimization."""
+    global _solver_running, _solver_results
+
+    try:
+        from scipy.optimize import minimize, differential_evolution
+        import numpy as np
+    except ImportError:
+        _solver_running = False
+        dpg.set_value("solver_progress_text", "Error: scipy not installed")
+        dpg.configure_item("btn_run_solver", enabled=True)
+        return
+
+    # Get current parameters as starting point
+    base_params = AppState.read_from_widgets("tab_ov")
+
+    # Parameters to optimize: r1, c1, e1, r2, c2, e2, ha, hf, mu_s, mu_t
+    opt_keys = ["r1", "c1", "e1", "r2", "c2", "e2", "ha", "hf", "mu_s", "mu_t"]
+    x0 = np.array([base_params[k] for k in opt_keys])
+
+    # Bounds: ±bounds_pct of current values (but ensure positive)
+    bounds = []
+    for i, k in enumerate(opt_keys):
+        val = x0[i]
+        low = max(val * (1 - bounds_pct), 0.001)
+        high = val * (1 + bounds_pct)
+        bounds.append((low, high))
+
+    # Fixed parameters
+    m = base_params["m"]
+    z_f = base_params["z_f"]
+    z_c = base_params["z_c"]
+
+    iteration_count = [0]
+    best_dmax_y = [float('inf')]
+    best_solution = [None]
+    found_optimal = [False]
+
+    def objective(x):
+        """Objective function: minimize dmax_y with rb penalty."""
+        iteration_count[0] += 1
+
+        # Build params dict
+        params = {
+            "m": m,
+            "z_f": z_f,
+            "z_c": z_c,
+            "w0": target_w0,
+            "r1": x[0],
+            "c1": x[1],
+            "e1": x[2],
+            "r2": x[3],
+            "c2": x[4],
+            "e2": x[5],
+            "ha": x[6],
+            "hf": x[7],
+            "mu_s": x[8],
+            "mu_t": x[9],
+        }
+
+        # Compute rb
+        rp = m * z_f / 2.0
+        s = params["mu_s"] * m * z_f
+        t = params["mu_t"] * s
+        ds = s - t / 2.0
+        rm = rp - ds - params["hf"]
+        rb = rm - (s - ds)
+
+        # Penalty for rb deviation
+        rb_error = abs(rb - target_rb)
+        rb_penalty = 1000.0 * max(0, rb_error - rb_tol) ** 2
+
+        # Compute dmax_y using existing functions
+        dmax_y = _compute_dmax_y_for_params(params)
+
+        if dmax_y is None:
+            return 1e6 + rb_penalty  # Invalid geometry
+
+        total = dmax_y + rb_penalty
+
+        # Track best and update progress
+        if total < best_dmax_y[0]:
+            best_dmax_y[0] = total
+
+        # Check for cancellation
+        if _solver_cancel:
+            return 1e9  # Return high value to stop
+
+        # Track best solution
+        if total < best_dmax_y[0]:
+            best_dmax_y[0] = total
+            best_solution[0] = x.copy()
+
+            # Check if we found optimal (dmax_y ≈ 0 and rb within tolerance)
+            if dmax_y < 0.001 and rb_error <= rb_tol:
+                found_optimal[0] = True
+
+        # Update progress every 25 evaluations
+        if iteration_count[0] % 25 == 0:
+            try:
+                dpg.set_value("solver_progress_text",
+                              f"Eval {iteration_count[0]}: dmax_y={dmax_y:.4f}, rb_err={rb_error:.4f}")
+            except:
+                pass
+
+        return total
+
+    def generation_callback(xk, convergence):
+        """Called after each generation."""
+        if _solver_cancel:
+            return True  # Stop optimization
+        if found_optimal[0]:
+            try:
+                dpg.set_value("solver_progress_text", "Found optimal solution! Stopping...")
+            except:
+                pass
+            return True  # Stop optimization - found optimal
+        try:
+            dpg.set_value("solver_progress_text",
+                          f"Generation complete, convergence={convergence:.4f}")
+        except:
+            pass
+        return False
+
+    # Run differential evolution (global optimizer)
+    try:
+        dpg.set_value("solver_progress_text", "Running optimization (this may take a minute)...")
+    except:
+        pass
+
+    result = differential_evolution(
+        objective,
+        bounds,
+        maxiter=30,   # Reduced iterations for speed
+        popsize=8,    # Smaller population (default is 15)
+        tol=1e-3,     # Looser tolerance for faster convergence
+        seed=42,
+        workers=1,    # Single thread for GUI compatibility
+        updating='deferred',
+        polish=False, # Skip local polish to save time
+        callback=generation_callback
+    )
+
+    # Use best solution found (either from result or tracked best)
+    if found_optimal[0] and best_solution[0] is not None:
+        best_x = best_solution[0]
+    else:
+        best_x = result.x
+
+    # Build final params
+    final_params = {
+        "m": m,
+        "z_f": z_f,
+        "z_c": z_c,
+        "w0": target_w0,
+    }
+    for i, k in enumerate(opt_keys):
+        final_params[k] = best_x[i]
+
+    # Compute final rb and dmax_y
+    rp = m * z_f / 2.0
+    s = final_params["mu_s"] * m * z_f
+    t = final_params["mu_t"] * s
+    ds = s - t / 2.0
+    rm = rp - ds - final_params["hf"]
+    final_rb = rm - (s - ds)
+    final_dmax_y = _compute_dmax_y_for_params(final_params)
+
+    _solver_results = {
+        "params": final_params,
+        "rb": final_rb,
+        "dmax_y": final_dmax_y,
+        "iterations": iteration_count[0],
+        "success": result.success or found_optimal[0],
+        "found_optimal": found_optimal[0],
+    }
+
+    _solver_running = False
+
+    # Reset buttons
+    try:
+        dpg.configure_item("btn_run_solver", show=True)
+        dpg.configure_item("btn_stop_solver", show=False)
+        dpg.configure_item("btn_close_solver", enabled=True)
+    except:
+        pass
+
+    # Check if cancelled
+    if _solver_cancel:
+        try:
+            dpg.set_value("solver_progress_text", "Solver cancelled.")
+        except:
+            pass
+        return
+
+    # Show results in the same dialog (thread-safe approach)
+    try:
+        dmax_str = f"{_solver_results['dmax_y']:.4f}" if _solver_results["dmax_y"] is not None else "N/A"
+        dpg.set_value("solver_progress_text",
+                      f"DONE! dmax_y={dmax_str}, rb={_solver_results['rb']:.4f}\nClick 'Show Results' below.")
+
+        # Add a "Show Results" button if it doesn't exist
+        if not dpg.does_item_exist("btn_show_results"):
+            dpg.add_button(
+                label="Show Results",
+                tag="btn_show_results",
+                callback=_show_solver_results,
+                width=scaled(120),
+                parent="solver_dialog",
+                before="btn_run_solver"
+            )
+    except Exception as e:
+        try:
+            dpg.set_value("solver_progress_text", f"Done but error showing: {e}")
+        except:
+            pass
+
+
+def _compute_dmax_y_for_params(params: dict) -> float | None:
+    """Compute dmax_y for given parameters using existing equations.
+
+    This is a standalone function that doesn't modify any global state.
+    Returns dmax_y value or None if geometry is invalid.
+    """
+    try:
+        # Build deformed flexspline
+        fs_result = build_deformed_flexspline(params)
+        if "error" in fs_result:
+            return None
+
+        # Build circular spline conjugate profile
+        conj = compute_conjugate_profile(params)
+        if "error" in conj:
+            return None
+
+        smooth_val = 0.001  # Default smoothing
+        smoothed = smooth_conjugate_profile(conj, s=smooth_val)
+        if "error" in smoothed:
+            return None
+
+        rp_c = conj.get("rp_c", 25.5)
+        smoothed_flank = smoothed.get("smoothed_flank", [])
+
+        if not smoothed_flank:
+            return None
+
+        # Get profile data for flexspline tooth
+        profile = compute_profile(params)
+        if "error" in profile:
+            return None
+
+        rm = profile["rm"]
+        w0 = params["w0"]
+        ds = profile["ds"]
+        hf = params["hf"]
+
+        # Raw tooth profile segments (no fillets)
+        pts_AB = profile["pts_AB"]
+
+        # Transform function for deformed coordinates (phi = 0 for first tooth)
+        def tooth_point_deformed(xr, yr):
+            phi = 0
+            rho = eq14_rho(phi, rm, w0)
+            mu = eq21_mu(phi, w0, rm)
+            phi1 = eq23_phi1(phi, w0, rm)
+            gamma = phi1  # phi2 = 0
+            psi = eq27_psi(mu, gamma)
+            return eq29_transform(xr, yr, psi, rho, gamma)
+
+        # Get addendum points (AB segment) for flexspline
+        ab_right = [tooth_point_deformed(x, y) for x, y in pts_AB]
+        ab_left = [tooth_point_deformed(-x, y) for x, y in pts_AB]
+        all_addendum = ab_right + ab_left
+
+        if not all_addendum:
+            return None
+
+        # Build circular spline tooth
+        right_flank_cs = list(smoothed_flank)
+        left_flank_cs = [(-x, y) for x, y in reversed(right_flank_cs)]
+
+        def local_to_global_cs(x_loc, y_loc):
+            r = rp_c + y_loc
+            theta = x_loc / rp_c
+            return r * math.sin(theta), r * math.cos(theta)
+
+        cs_tooth = []
+        for x, y in left_flank_cs:
+            cs_tooth.append(local_to_global_cs(x, y))
+        for x, y in right_flank_cs:
+            cs_tooth.append(local_to_global_cs(x, y))
+
+        if not cs_tooth:
+            return None
+
+        # Calculate dmax_y: Y-penetration of CS into FS addendum
+        add_x_min = min(p[0] for p in all_addendum)
+        add_x_max = max(p[0] for p in all_addendum)
+
+        def interpolate_y_at_x(flank_points, target_x):
+            if not flank_points:
+                return None
+            sorted_pts = sorted(flank_points, key=lambda p: p[0])
+            for i in range(len(sorted_pts) - 1):
+                x1, x2 = sorted_pts[i][0], sorted_pts[i + 1][0]
+                if x1 <= target_x <= x2 or x2 <= target_x <= x1:
+                    y1, y2 = sorted_pts[i][1], sorted_pts[i + 1][1]
+                    if abs(x2 - x1) < 1e-9:
+                        return (y1 + y2) / 2
+                    t = (target_x - x1) / (x2 - x1)
+                    return y1 + t * (y2 - y1)
+            return None
+
+        dmax_y = 0.0
+        for cs_x, cs_y in cs_tooth:
+            if cs_x < add_x_min or cs_x > add_x_max:
+                continue
+
+            if cs_x >= 0:
+                fs_add_y = interpolate_y_at_x(ab_right, cs_x)
+            else:
+                fs_add_y = interpolate_y_at_x(ab_left, cs_x)
+
+            if fs_add_y is None:
+                continue
+
+            if cs_y > fs_add_y:
+                penetration = cs_y - fs_add_y
+                if penetration > dmax_y:
+                    dmax_y = penetration
+
+        return dmax_y
+
+    except Exception as e:
+        return None
+
+
+def _show_solver_results():
+    """Show solver results dialog."""
+    global _solver_results
+
+    if _solver_results is None:
+        return
+
+    # Clean up solver input dialog
+    if dpg.does_item_exist("solver_dialog"):
+        dpg.delete_item("solver_dialog")
+
+    # Clean up existing results dialog
+    if dpg.does_item_exist("solver_results_dialog"):
+        dpg.delete_item("solver_results_dialog")
+
+    results = _solver_results
+    params = results["params"]
+
+    window_width = scaled(450)
+    window_height = scaled(500)
+
+    with dpg.window(
+        label="Solver Results",
+        tag="solver_results_dialog",
+        modal=True,
+        width=window_width,
+        height=window_height,
+        pos=(dpg.get_viewport_width() // 2 - window_width // 2,
+             dpg.get_viewport_height() // 2 - window_height // 2),
+        no_resize=True,
+        no_collapse=True,
+        on_close=lambda: dpg.delete_item("solver_results_dialog")
+    ):
+        dpg.add_spacer(height=10)
+
+        if results["success"]:
+            dpg.add_text("Optimization completed successfully!", color=(100, 255, 100))
+        else:
+            dpg.add_text("Optimization finished (may not be optimal)", color=(255, 200, 100))
+
+        dpg.add_spacer(height=10)
+        dpg.add_separator()
+        dpg.add_spacer(height=10)
+
+        # Results summary
+        dpg.add_text("Results:", color=(200, 200, 255))
+        dpg.add_text(f"  Final dmax_y: {results['dmax_y']:.4f} mm")
+        dpg.add_text(f"  Final rb:     {results['rb']:.4f} mm")
+        dpg.add_text(f"  Iterations:   {results['iterations']}")
+
+        dpg.add_spacer(height=10)
+        dpg.add_separator()
+        dpg.add_spacer(height=10)
+
+        # Optimized parameters
+        dpg.add_text("Optimized Parameters:", color=(200, 200, 255))
+
+        param_labels = {
+            "r1": "r1 (convex radius)",
+            "c1": "c1 (O1 x-offset)",
+            "e1": "e1 (O1 y-offset)",
+            "r2": "r2 (concave radius)",
+            "c2": "c2 (O2 x-offset)",
+            "e2": "e2 (O2 y-offset)",
+            "ha": "ha (addendum)",
+            "hf": "hf (dedendum)",
+            "mu_s": "mu_s (ring coeff)",
+            "mu_t": "mu_t (cup coeff)",
+            "w0": "w0 (deformation)",
+        }
+
+        for key in ["r1", "c1", "e1", "r2", "c2", "e2", "ha", "hf", "mu_s", "mu_t", "w0"]:
+            label = param_labels.get(key, key)
+            value = params[key]
+            dpg.add_text(f"  {label}: {value:.4f}")
+
+        dpg.add_spacer(height=15)
+        dpg.add_separator()
+        dpg.add_spacer(height=10)
+
+        with dpg.group(horizontal=True):
+            dpg.add_button(
+                label="Apply Parameters",
+                callback=_apply_solver_results,
+                width=scaled(140)
+            )
+            dpg.add_spacer(width=20)
+            dpg.add_button(
+                label="Close",
+                callback=lambda: dpg.delete_item("solver_results_dialog"),
+                width=scaled(80)
+            )
+
+
+def _apply_solver_results():
+    """Apply solver results to the current parameters."""
+    global _solver_results
+
+    if _solver_results is None:
+        return
+
+    params = _solver_results["params"]
+
+    # Update AppState with optimized parameters
+    for key in ["r1", "c1", "e1", "r2", "c2", "e2", "ha", "hf", "mu_s", "mu_t", "w0"]:
+        AppState.set_param(key, params[key])
+
+    # Update widgets
+    AppState.write_to_widgets("tab_ov")
+
+    # Close dialog and update plot
+    if dpg.does_item_exist("solver_results_dialog"):
+        dpg.delete_item("solver_results_dialog")
+
+    _update_plot()
+    update_info_text("tab_ov", "Solver parameters applied!", color=(100, 255, 100))
