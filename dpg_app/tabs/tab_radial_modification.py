@@ -396,7 +396,8 @@ def _draw_undeformed_with_dmax():
         dmax_x=_applied_dmax_x,
         dmax_y=_applied_dmax_y,
         r_fillet_add=fillet_add,
-        r_fillet_ded=fillet_ded
+        r_fillet_ded=fillet_ded,
+        smooth=smooth_val
     )
 
     if "error" in fs_result:
@@ -619,6 +620,7 @@ def _draw_overlay_with_dmax():
     params = AppState.read_from_widgets("tab_ov")
     fillet_add = AppState.get_fillet_add()
     fillet_ded = AppState.get_fillet_ded()
+    smooth_val = AppState.get_smooth()
 
     _clear_plot_series()
     y_axis = "tab_ov_y"
@@ -629,7 +631,8 @@ def _draw_overlay_with_dmax():
         dmax_x=_applied_dmax_x,
         dmax_y=_applied_dmax_y,
         r_fillet_add=fillet_add,
-        r_fillet_ded=fillet_ded
+        r_fillet_ded=fillet_ded,
+        smooth=smooth_val
     )
 
     if "error" in fs_result:

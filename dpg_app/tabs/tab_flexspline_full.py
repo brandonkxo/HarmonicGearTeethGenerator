@@ -33,7 +33,7 @@ def create_tab_flexspline_full():
             create_parameter_panel(
                 tag_prefix="tab_fs",
                 on_change=_on_param_change,
-                include_smooth=False,
+                include_smooth=True,
                 include_fillets=True
             )
 
@@ -91,14 +91,15 @@ def _update_plot():
     params = AppState.read_from_widgets("tab_fs")
     fillet_add = AppState.get_fillet_add()
     fillet_ded = AppState.get_fillet_ded()
+    smooth_val = AppState.get_smooth()
 
     update_info_text("tab_fs", "Computing flexspline...", color=(255, 200, 100))
 
     # Choose deformed or undeformed
     if _deformed:
-        result = build_deformed_flexspline(params, r_fillet_add=fillet_add, r_fillet_ded=fillet_ded)
+        result = build_deformed_flexspline(params, r_fillet_add=fillet_add, r_fillet_ded=fillet_ded, smooth=smooth_val)
     else:
-        result = build_full_flexspline(params, r_fillet_add=fillet_add, r_fillet_ded=fillet_ded)
+        result = build_full_flexspline(params, r_fillet_add=fillet_add, r_fillet_ded=fillet_ded, smooth=smooth_val)
 
     if "error" in result:
         update_info_text("tab_fs", f"Error: {result['error']}", color=(255, 100, 100))

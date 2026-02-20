@@ -908,7 +908,8 @@ def build_single_tooth_outline(params: dict) -> dict:
 def build_full_flexspline(params: dict,
                           n_ded_arc: int = 39,
                           r_fillet_add: float = 0.2,
-                          r_fillet_ded: float | None = None) -> dict:
+                          r_fillet_ded: float | None = None,
+                          smooth: float = 0.0) -> dict:
     """Pattern the flexspline tooth around the full pitch circle.
 
     Produces one continuous polyline chain:
@@ -1075,6 +1076,11 @@ def build_full_flexspline(params: dict,
 
     # Single tooth flanks in local coords (with trimmed AB + CD)
     right_flank = list(pts_AB_trimmed) + list(result["pts_BC"]) + list(pts_CD_trimmed)
+
+    # Apply B-spline smoothing if requested
+    if smooth > 0:
+        right_flank = smooth_branch(right_flank, s=smooth, num_out=200)
+
     left_flank = [(-x, y) for x, y in reversed(right_flank)]
 
     # Dedendum radius
@@ -1157,7 +1163,8 @@ def build_full_flexspline(params: dict,
 def build_deformed_flexspline(params: dict,
                               n_ded_arc: int = 39,
                               r_fillet_add: float = 0.2,
-                              r_fillet_ded: float | None = None) -> dict:
+                              r_fillet_ded: float | None = None,
+                              smooth: float = 0.0) -> dict:
     """Pattern the flexspline around the DEFORMED neutral layer.
 
     Uses the paper's coordinate transform (Eqs 14, 21, 23, 27, 29) to show
@@ -1325,6 +1332,11 @@ def build_deformed_flexspline(params: dict,
 
     # Single tooth flanks in local coords (with trimmed AB + CD)
     right_flank = list(pts_AB_trimmed) + list(result["pts_BC"]) + list(pts_CD_trimmed)
+
+    # Apply B-spline smoothing if requested
+    if smooth > 0:
+        right_flank = smooth_branch(right_flank, s=smooth, num_out=200)
+
     left_flank = [(-x, y) for x, y in reversed(right_flank)]
 
     # Angular pitch
@@ -1522,7 +1534,8 @@ def build_dmax_deformed_flexspline(params: dict,
                                     dmax_y: float = 0.0,
                                     n_ded_arc: int = 39,
                                     r_fillet_add: float = 0.2,
-                                    r_fillet_ded: float | None = None) -> dict:
+                                    r_fillet_ded: float | None = None,
+                                    smooth: float = 0.0) -> dict:
     """Pattern the flexspline around the DEFORMED neutral layer with dmax modifications and fillets.
 
     This applies both X and Y dmax modifications before patterning with fillets:
@@ -1727,6 +1740,11 @@ def build_dmax_deformed_flexspline(params: dict,
 
     # Single tooth flanks in local coords (with trimmed AB + CD)
     right_flank = list(pts_AB_trimmed) + list(pts_BC) + list(pts_CD_trimmed)
+
+    # Apply B-spline smoothing if requested
+    if smooth > 0:
+        right_flank = smooth_branch(right_flank, s=smooth, num_out=200)
+
     left_flank = [(-x, y) for x, y in reversed(right_flank)]
 
     # Angular pitch
@@ -2085,7 +2103,8 @@ def build_dmax_full_flexspline(params: dict,
                                 dmax_y: float = 0.0,
                                 n_ded_arc: int = 39,
                                 r_fillet_add: float = 0.2,
-                                r_fillet_ded: float | None = None) -> dict:
+                                r_fillet_ded: float | None = None,
+                                smooth: float = 0.0) -> dict:
     """Pattern the UNDEFORMED flexspline tooth with dmax modifications.
 
     This applies both X and Y dmax modifications before patterning with fillets,
@@ -2282,6 +2301,11 @@ def build_dmax_full_flexspline(params: dict,
 
     # Single tooth flanks in local coords (with trimmed AB + CD)
     right_flank = list(pts_AB_trimmed) + list(pts_BC) + list(pts_CD_trimmed)
+
+    # Apply B-spline smoothing if requested
+    if smooth > 0:
+        right_flank = smooth_branch(right_flank, s=smooth, num_out=200)
+
     left_flank = [(-x, y) for x, y in reversed(right_flank)]
 
     # Dedendum radius
