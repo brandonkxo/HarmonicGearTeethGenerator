@@ -100,16 +100,6 @@ def create_tab_radial_modification():
                     show=False
                 )
 
-            # Solver button
-            dpg.add_spacer(height=5)
-            with dpg.group(horizontal=True, tag="solver_buttons"):
-                dpg.add_button(
-                    label="Solver",
-                    tag="btn_solver",
-                    callback=_show_solver_dialog,
-                    width=scaled(120)
-                )
-
             # Debug mode buttons (Calculate dmax, Show Full Gears) - initially hidden
             with dpg.group(horizontal=True, tag="debug_mode_buttons", show=False):
                 dpg.add_button(
@@ -129,12 +119,6 @@ def create_tab_radial_modification():
                 tag_prefix="tab_ov",
                 tab_type="radial_modification"
             )
-
-            # Legend
-            create_legend("tab_ov", [
-                ("Flexspline", COLORS["flexspline"]),
-                ("Circular Spline", COLORS["circular_spline"]),
-            ])
 
             create_info_text("tab_ov", "Click Update to compute overlay.")
 
@@ -1417,6 +1401,13 @@ def _show_solver_dialog():
                 width=scaled(60),
                 show=False
             )
+            dpg.add_button(
+                label="Apply Results",
+                tag="btn_apply_results",
+                callback=_apply_solver_results,
+                width=scaled(100),
+                show=False
+            )
             dpg.add_spacer(width=10)
             dpg.add_button(
                 label="Close",
@@ -1464,64 +1455,69 @@ def _run_solver():
     thread.start()
 
 
+class _OptimalFound(Exception):
+    """Exception raised when optimal solution is found."""
+    pass
+
+
 def _solver_thread(target_rb: float, target_w0: float, bounds_pct: float, rb_tol: float):
-    """Solver thread - runs optimization."""
+    """Solver thread - runs optimization using Powell method."""
     global _solver_running, _solver_results
 
     try:
-        from scipy.optimize import minimize, differential_evolution
+        from scipy.optimize import minimize
         import numpy as np
     except ImportError:
         _solver_running = False
-        dpg.set_value("solver_progress_text", "Error: scipy not installed")
-        dpg.configure_item("btn_run_solver", enabled=True)
+        try:
+            dpg.set_value("solver_progress_text", "Error: scipy not installed")
+            dpg.configure_item("btn_run_solver", show=True)
+            dpg.configure_item("btn_stop_solver", show=False)
+        except:
+            pass
         return
 
     # Get current parameters as starting point
     base_params = AppState.read_from_widgets("tab_ov")
 
-    # Parameters to optimize: r1, c1, e1, r2, c2, e2, ha, hf, mu_s, mu_t
+    # Parameters to optimize
     opt_keys = ["r1", "c1", "e1", "r2", "c2", "e2", "ha", "hf", "mu_s", "mu_t"]
     x0 = np.array([base_params[k] for k in opt_keys])
 
-    # Bounds: ±bounds_pct of current values (but ensure positive)
-    bounds = []
-    for i, k in enumerate(opt_keys):
-        val = x0[i]
-        low = max(val * (1 - bounds_pct), 0.001)
-        high = val * (1 + bounds_pct)
-        bounds.append((low, high))
+    # Bounds
+    bounds_low = []
+    bounds_high = []
+    for k in opt_keys:
+        val = base_params[k]
+        bounds_low.append(max(val * (1 - bounds_pct), 0.001))
+        bounds_high.append(val * (1 + bounds_pct))
 
     # Fixed parameters
     m = base_params["m"]
     z_f = base_params["z_f"]
     z_c = base_params["z_c"]
 
-    iteration_count = [0]
-    best_dmax_y = [float('inf')]
-    best_solution = [None]
-    found_optimal = [False]
+    eval_count = [0]
+    best_result = {"dmax_y": float('inf'), "rb_err": float('inf'), "x": x0.copy(), "total": float('inf')}
 
     def objective(x):
-        """Objective function: minimize dmax_y with rb penalty."""
-        iteration_count[0] += 1
+        """Objective function."""
+        # Check cancellation
+        if _solver_cancel:
+            raise _OptimalFound()
 
-        # Build params dict
+        eval_count[0] += 1
+
+        # Clip to bounds
+        x_clipped = np.clip(x, bounds_low, bounds_high)
+
+        # Build params
         params = {
-            "m": m,
-            "z_f": z_f,
-            "z_c": z_c,
-            "w0": target_w0,
-            "r1": x[0],
-            "c1": x[1],
-            "e1": x[2],
-            "r2": x[3],
-            "c2": x[4],
-            "e2": x[5],
-            "ha": x[6],
-            "hf": x[7],
-            "mu_s": x[8],
-            "mu_t": x[9],
+            "m": m, "z_f": z_f, "z_c": z_c, "w0": target_w0,
+            "r1": x_clipped[0], "c1": x_clipped[1], "e1": x_clipped[2],
+            "r2": x_clipped[3], "c2": x_clipped[4], "e2": x_clipped[5],
+            "ha": x_clipped[6], "hf": x_clipped[7],
+            "mu_s": x_clipped[8], "mu_t": x_clipped[9],
         }
 
         # Compute rb
@@ -1531,99 +1527,59 @@ def _solver_thread(target_rb: float, target_w0: float, bounds_pct: float, rb_tol
         ds = s - t / 2.0
         rm = rp - ds - params["hf"]
         rb = rm - (s - ds)
-
-        # Penalty for rb deviation
         rb_error = abs(rb - target_rb)
-        rb_penalty = 1000.0 * max(0, rb_error - rb_tol) ** 2
 
-        # Compute dmax_y using existing functions
+        # Compute dmax_y
         dmax_y = _compute_dmax_y_for_params(params)
-
         if dmax_y is None:
-            return 1e6 + rb_penalty  # Invalid geometry
+            dmax_y = 1e6
 
+        # Objective: minimize dmax_y with rb penalty
+        rb_penalty = 100.0 * max(0, rb_error - rb_tol) ** 2
         total = dmax_y + rb_penalty
 
-        # Track best and update progress
-        if total < best_dmax_y[0]:
-            best_dmax_y[0] = total
+        # Track best
+        if total < best_result["total"]:
+            best_result["total"] = total
+            best_result["dmax_y"] = dmax_y
+            best_result["rb_err"] = rb_error
+            best_result["x"] = x_clipped.copy()
 
-        # Check for cancellation
-        if _solver_cancel:
-            return 1e9  # Return high value to stop
+        # Update progress
+        try:
+            dpg.set_value("solver_progress_text",
+                          f"Eval {eval_count[0]}: dmax_y={dmax_y:.4f}, rb_err={rb_error:.4f}")
+        except:
+            pass
 
-        # Track best solution
-        if total < best_dmax_y[0]:
-            best_dmax_y[0] = total
-            best_solution[0] = x.copy()
-
-            # Check if we found optimal (dmax_y ≈ 0 and rb within tolerance)
-            if dmax_y < 0.001 and rb_error <= rb_tol:
-                found_optimal[0] = True
-
-        # Update progress every 25 evaluations
-        if iteration_count[0] % 25 == 0:
-            try:
-                dpg.set_value("solver_progress_text",
-                              f"Eval {iteration_count[0]}: dmax_y={dmax_y:.4f}, rb_err={rb_error:.4f}")
-            except:
-                pass
+        # Early stop if optimal
+        if dmax_y < 0.001 and rb_error <= rb_tol:
+            raise _OptimalFound()
 
         return total
 
-    def generation_callback(xk, convergence):
-        """Called after each generation."""
-        if _solver_cancel:
-            return True  # Stop optimization
-        if found_optimal[0]:
-            try:
-                dpg.set_value("solver_progress_text", "Found optimal solution! Stopping...")
-            except:
-                pass
-            return True  # Stop optimization - found optimal
-        try:
-            dpg.set_value("solver_progress_text",
-                          f"Generation complete, convergence={convergence:.4f}")
-        except:
-            pass
-        return False
-
-    # Run differential evolution (global optimizer)
+    # Run optimizer
     try:
-        dpg.set_value("solver_progress_text", "Running optimization (this may take a minute)...")
+        dpg.set_value("solver_progress_text", "Starting Powell optimizer...")
     except:
         pass
 
-    result = differential_evolution(
-        objective,
-        bounds,
-        maxiter=30,   # Reduced iterations for speed
-        popsize=8,    # Smaller population (default is 15)
-        tol=1e-3,     # Looser tolerance for faster convergence
-        seed=42,
-        workers=1,    # Single thread for GUI compatibility
-        updating='deferred',
-        polish=False, # Skip local polish to save time
-        callback=generation_callback
-    )
+    success = False
+    try:
+        result = minimize(objective, x0, method='Powell',
+                          options={'maxiter': 200, 'maxfev': 500, 'ftol': 1e-4})
+        success = result.success
+    except _OptimalFound:
+        success = True  # Early termination
 
-    # Use best solution found (either from result or tracked best)
-    if found_optimal[0] and best_solution[0] is not None:
-        best_x = best_solution[0]
-    else:
-        best_x = result.x
+    best_x = best_result["x"]
 
-    # Build final params
-    final_params = {
-        "m": m,
-        "z_f": z_f,
-        "z_c": z_c,
-        "w0": target_w0,
-    }
+    # Build final params from best result
+    final_params = {"m": m, "z_f": z_f, "z_c": z_c, "w0": target_w0}
     for i, k in enumerate(opt_keys):
-        final_params[k] = best_x[i]
+        final_params[k] = float(best_x[i])
 
-    # Compute final rb and dmax_y
+    # Compute final rb
     rp = m * z_f / 2.0
     s = final_params["mu_s"] * m * z_f
     t = final_params["mu_t"] * s
@@ -1636,9 +1592,8 @@ def _solver_thread(target_rb: float, target_w0: float, bounds_pct: float, rb_tol
         "params": final_params,
         "rb": final_rb,
         "dmax_y": final_dmax_y,
-        "iterations": iteration_count[0],
-        "success": result.success or found_optimal[0],
-        "found_optimal": found_optimal[0],
+        "iterations": eval_count[0],
+        "success": success,
     }
 
     _solver_running = False
@@ -1659,25 +1614,15 @@ def _solver_thread(target_rb: float, target_w0: float, bounds_pct: float, rb_tol
             pass
         return
 
-    # Show results in the same dialog (thread-safe approach)
+    # Show results and Apply button
     try:
         dmax_str = f"{_solver_results['dmax_y']:.4f}" if _solver_results["dmax_y"] is not None else "N/A"
         dpg.set_value("solver_progress_text",
-                      f"DONE! dmax_y={dmax_str}, rb={_solver_results['rb']:.4f}\nClick 'Show Results' below.")
-
-        # Add a "Show Results" button if it doesn't exist
-        if not dpg.does_item_exist("btn_show_results"):
-            dpg.add_button(
-                label="Show Results",
-                tag="btn_show_results",
-                callback=_show_solver_results,
-                width=scaled(120),
-                parent="solver_dialog",
-                before="btn_run_solver"
-            )
+                      f"DONE! dmax_y={dmax_str}, rb={_solver_results['rb']:.4f}")
+        dpg.configure_item("btn_apply_results", show=True)
     except Exception as e:
         try:
-            dpg.set_value("solver_progress_text", f"Done but error showing: {e}")
+            dpg.set_value("solver_progress_text", f"Done but error: {e}")
         except:
             pass
 
@@ -1906,14 +1851,15 @@ def _apply_solver_results():
 
     # Update AppState with optimized parameters
     for key in ["r1", "c1", "e1", "r2", "c2", "e2", "ha", "hf", "mu_s", "mu_t", "w0"]:
-        AppState.set_param(key, params[key])
+        if key in params:
+            AppState.set_param(key, params[key])
 
     # Update widgets
     AppState.write_to_widgets("tab_ov")
 
-    # Close dialog and update plot
-    if dpg.does_item_exist("solver_results_dialog"):
-        dpg.delete_item("solver_results_dialog")
+    # Close solver dialog and update plot
+    if dpg.does_item_exist("solver_dialog"):
+        dpg.delete_item("solver_dialog")
 
     _update_plot()
-    update_info_text("tab_ov", "Solver parameters applied!", color=(100, 255, 100))
+    update_info_text("tab_ov", f"Solver applied! dmax_y={_solver_results['dmax_y']:.4f}, rb={_solver_results['rb']:.4f}", color=(100, 255, 100))
