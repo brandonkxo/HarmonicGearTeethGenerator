@@ -1079,6 +1079,8 @@ def build_full_flexspline(params: dict,
 
     # Apply B-spline smoothing if requested
     if smooth > 0:
+        # Sort by y descending (addendum to dedendum) for continuous traversal
+        right_flank.sort(key=lambda p: -p[1])
         right_flank = smooth_branch(right_flank, s=smooth, num_out=200)
 
     left_flank = [(-x, y) for x, y in reversed(right_flank)]
@@ -1335,6 +1337,8 @@ def build_deformed_flexspline(params: dict,
 
     # Apply B-spline smoothing if requested
     if smooth > 0:
+        # Sort by y descending (addendum to dedendum) for continuous traversal
+        right_flank.sort(key=lambda p: -p[1])
         right_flank = smooth_branch(right_flank, s=smooth, num_out=200)
 
     left_flank = [(-x, y) for x, y in reversed(right_flank)]
@@ -1743,6 +1747,8 @@ def build_dmax_deformed_flexspline(params: dict,
 
     # Apply B-spline smoothing if requested
     if smooth > 0:
+        # Sort by y descending (addendum to dedendum) for continuous traversal
+        right_flank.sort(key=lambda p: -p[1])
         right_flank = smooth_branch(right_flank, s=smooth, num_out=200)
 
     left_flank = [(-x, y) for x, y in reversed(right_flank)]
@@ -2304,6 +2310,8 @@ def build_dmax_full_flexspline(params: dict,
 
     # Apply B-spline smoothing if requested
     if smooth > 0:
+        # Sort by y descending (addendum to dedendum) for continuous traversal
+        right_flank.sort(key=lambda p: -p[1])
         right_flank = smooth_branch(right_flank, s=smooth, num_out=200)
 
     left_flank = [(-x, y) for x, y in reversed(right_flank)]
